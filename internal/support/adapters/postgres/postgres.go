@@ -44,6 +44,7 @@ func (s *Store) WithinTx(ctx context.Context, fn func(context.Context) error) er
 	if txFromContext(ctx) != nil {
 		return fn(ctx)
 	}
+	ctx, hooks := ports.WithHooks(ctx)
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -55,7 +56,25 @@ func (s *Store) WithinTx(ctx context.Context, fn func(context.Context) error) er
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit tx: %w", err)
 	}
+	for _, h := range *hooks {
+		h()
+	}
 	return nil
+}
+
+// Exec/Query/QueryRow are an escape hatch for packages outside postgres
+// (e.g. a moderation stub) that need to run their own SQL inside the same
+// ambient transaction as the rest of a WithinTx block.
+func (s *Store) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	return s.q(ctx).Exec(ctx, sql, args...)
+}
+
+func (s *Store) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	return s.q(ctx).Query(ctx, sql, args...)
+}
+
+func (s *Store) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return s.q(ctx).QueryRow(ctx, sql, args...)
 }
 
 func txFromContext(ctx context.Context) pgx.Tx {

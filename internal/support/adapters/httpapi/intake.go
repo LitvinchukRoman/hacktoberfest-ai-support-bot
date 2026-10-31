@@ -15,6 +15,7 @@ import (
 
 	"github.com/handziurdmytro/skelar/internal/support/guard"
 	"github.com/handziurdmytro/skelar/internal/support/ports"
+	"github.com/handziurdmytro/skelar/internal/support/stream"
 )
 
 type Store interface {
@@ -27,8 +28,20 @@ type Store interface {
 
 type Intake struct {
 	Store   Store
+	Broker  *stream.Broker
 	Limiter *Limiter
 	Now     func() time.Time
+}
+
+func (h *Intake) appendEvent(ctx context.Context, ticketID, typ string, staff, public json.RawMessage) error {
+	e, err := h.Store.Append(ctx, ticketID, typ, staff, public)
+	if err != nil {
+		return err
+	}
+	if h.Broker != nil {
+		ports.AfterCommit(ctx, func() { h.Broker.Publish(e) })
+	}
+	return nil
 }
 
 func (h *Intake) now() time.Time {
@@ -148,7 +161,7 @@ func (h *Intake) PostMessage(w http.ResponseWriter, r *http.Request) {
 		messageID = msg.ID
 
 		payload, _ := json.Marshal(map[string]any{"stage": "received", "summary": "Отримав твоє повідомлення…"})
-		if _, err := h.Store.Append(ctx, ticket.ID, "trace", payload, payload); err != nil {
+		if err := h.appendEvent(ctx, ticket.ID, "trace", payload, payload); err != nil {
 			return err
 		}
 

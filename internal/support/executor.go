@@ -80,7 +80,7 @@ func (s *Service) execute(ctx context.Context, in executeInput) error {
 				return err
 			}
 			payload, _ := json.Marshal(map[string]any{"author": "bot", "visibility": "public", "text": in.Reply})
-			if _, err := s.Store.Append(ctx, t.ID, "message", payload, payload); err != nil {
+			if err := s.appendEvent(ctx, t.ID, "message", payload, payload); err != nil {
 				return err
 			}
 		}
@@ -94,8 +94,7 @@ func (s *Service) execute(ctx context.Context, in executeInput) error {
 		statusPayload, _ := json.Marshal(map[string]any{
 			"status": t.Status, "autonomy": autonomy, "reason": t.EscalationReason,
 		})
-		_, err := s.Store.Append(ctx, t.ID, "status", statusPayload, statusPayload)
-		return err
+		return s.appendEvent(ctx, t.ID, "status", statusPayload, statusPayload)
 	})
 }
 

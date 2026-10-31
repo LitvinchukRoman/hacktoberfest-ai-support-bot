@@ -13,6 +13,7 @@ import (
 	"github.com/handziurdmytro/skelar/internal/support/domain"
 	"github.com/handziurdmytro/skelar/internal/support/guard"
 	"github.com/handziurdmytro/skelar/internal/support/ports"
+	"github.com/handziurdmytro/skelar/internal/support/stream"
 )
 
 type Store interface {
@@ -28,10 +29,24 @@ type Store interface {
 
 type Service struct {
 	Store    Store
+	Broker   *stream.Broker
 	Brain    domain.Brain
 	Fallback domain.Classifier
 	Mode     func(ctx context.Context) guard.Mode
 	Now      func() time.Time
+}
+
+// appendEvent persists the event and schedules its broadcast for right
+// after the enclosing transaction (if any) commits — never before.
+func (s *Service) appendEvent(ctx context.Context, ticketID, typ string, staff, public json.RawMessage) error {
+	e, err := s.Store.Append(ctx, ticketID, typ, staff, public)
+	if err != nil {
+		return err
+	}
+	if s.Broker != nil {
+		ports.AfterCommit(ctx, func() { s.Broker.Publish(e) })
+	}
+	return nil
 }
 
 const (
@@ -263,7 +278,7 @@ func (s *Service) trace(ctx context.Context, ticketID, stage, summary string, da
 		slog.Error("support: marshal trace", "stage", stage, "err", err)
 		return
 	}
-	if _, err := s.Store.Append(ctx, ticketID, "trace", staff, public); err != nil {
+	if err := s.appendEvent(ctx, ticketID, "trace", staff, public); err != nil {
 		slog.Error("support: append trace", "ticket", ticketID, "stage", stage, "err", err)
 	}
 }
