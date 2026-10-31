@@ -1,10 +1,13 @@
 DATABASE_URL ?= postgres://postgres:postgres@localhost:15432/skelar?sslmode=disable
 TEST_DATABASE_URL ?= postgres://postgres:postgres@localhost:15432/skelar?sslmode=disable
 
-.PHONY: build test test-integration test-all vet fmt lint migrate-up migrate-down db-up db-down db-reset
+.PHONY: build test test-integration test-all vet fmt lint migrate-up migrate-down db-up db-down db-reset run
 
 build:
 	go build ./...
+
+run: db-up
+	DATABASE_URL="$(DATABASE_URL)" SUPPORT_DEV_TOOLS=true PORT=8080 go run ./cmd/server
 
 test:
 	go test ./...
