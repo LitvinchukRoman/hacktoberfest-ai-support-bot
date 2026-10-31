@@ -146,6 +146,67 @@ type JobQueue interface {
 	Fail(ctx context.Context, ticketID string, backoff time.Duration, errCode string) error
 }
 
+// Action mirrors the support_actions row.
+type Action struct {
+	ID             string
+	TicketID       string
+	Type           domain.ActionType
+	IdeaID         *string
+	Params         map[string]string
+	Status         string // pending | approved | rejected | executed | failed
+	IdempotencyKey string
+	Rule           string
+	Evidence       json.RawMessage
+	DraftReply     string
+	FinalReply     *string
+	Edited         bool
+	Reason         *string
+	DecidedBy      *string
+	DecidedAt      *time.Time
+	Error          *string
+	CreatedAt      time.Time
+}
+
+type NewActionInput struct {
+	ID             string
+	TicketID       string
+	Type           domain.ActionType
+	IdeaID         *string
+	Params         map[string]string
+	Status         string // pending | executed, set by the caller
+	IdempotencyKey string
+	Rule           string
+	Evidence       json.RawMessage
+	DraftReply     string
+	DecidedAt      *time.Time // non-nil when Status != "pending"
+}
+
+type NewDecisionInput struct {
+	ID               string
+	TicketID         string
+	Classification   json.RawMessage
+	PolicyRule       string
+	FinalRule        string
+	Autonomy         domain.Autonomy
+	Decision         json.RawMessage
+	Checks           json.RawMessage
+	Model            string
+	PromptTokens     int
+	CompletionTokens int
+	LatencyMS        int
+}
+
+type DecisionRepo interface {
+	InsertDecision(ctx context.Context, in NewDecisionInput) error
+}
+
+type ActionRepo interface {
+	// InsertAction is idempotent on idempotency_key: a duplicate insert
+	// (e.g. the dirty-requeue path reprocessing the same decision) is a
+	// silent no-op.
+	InsertAction(ctx context.Context, in NewActionInput) error
+}
+
 // TxManager runs fn inside a single database transaction. Repos pick the
 // active transaction up from ctx, so WithinTx composes freely: a handler
 // can call Tickets().Create, Messages().Insert and Events().Append inside
