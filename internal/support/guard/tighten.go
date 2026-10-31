@@ -72,7 +72,15 @@ func Tighten(in Input, cfg Config) domain.Decision {
 	case has(SignalInjection) || slices.Contains(c.Signals, "prompt_injection_attempt"):
 		out = escalate(d, "prompt_injection", "safety.cannot_do", domain.QueueAdmins, 2)
 	case has(SignalDataRequest) || c.Intent == domain.IntentAccountData:
-		out = domain.Decision{
+		// A GDPR request is a fixed, deterministic outcome — always approve
+		// with a tracked data_request action — not a "tighten by one notch"
+		// escalation. It must win even when policy's own proposal for
+		// account_data was a generic escalate handoff: the anti-relax check
+		// below would otherwise block exactly this (approve looks softer
+		// than escalate) and silently drop the GDPR action/due date
+		// entirely. Returning here is deliberate: nothing downstream should
+		// touch this outcome.
+		return domain.Decision{
 			Autonomy:   domain.AutonomyApprove,
 			Rule:       "G_data_request",
 			TemplateID: "gdpr.request_received",

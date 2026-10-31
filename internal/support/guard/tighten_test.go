@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/handziurdmytro/skelar/internal/support/domain"
@@ -222,6 +223,12 @@ func TestEscalateClearsActionsAndSuggestions(t *testing.T) {
 // TestTightenNeverRelaxes is the property the DoD calls out explicitly:
 // across every decision x signal-set x mode, Tighten must never move a
 // decision closer to auto than the policy already proposed.
+// TestTightenNeverRelaxes checks the no-relax property with one documented,
+// deliberate exception: a GDPR data request (signal or account_data intent)
+// always lands on approve+data_request, even overriding a generic escalate
+// handoff — that generic escalate carries no due date or tracked action, so
+// "relaxing" it into the law-mandated approve flow is the correct outcome,
+// not a bug. Every other input combination still must never relax.
 func TestTightenNeverRelaxes(t *testing.T) {
 	autonomies := []domain.Autonomy{domain.AutonomyAuto, domain.AutonomyApprove, domain.AutonomyEscalate}
 	allSignals := []Signal{SignalSelfHarm, SignalLegal, SignalDataRequest, SignalInjection, SignalHuman}
@@ -251,9 +258,21 @@ func TestTightenNeverRelaxes(t *testing.T) {
 								d := domain.Decision{Autonomy: a, Rule: "R_test", Status: domain.StatusSolved}
 								cls := domain.Classification{Intent: intent, Emotion: emotion, Confidence: conf}
 								out := Tighten(Input{Decision: d, Class: cls, Signals: sig, Mode: mode, RecentTickets: recent}, DefaultConfig)
-								if domain.Stricter(a, out.Autonomy) != out.Autonomy {
+								// Self-harm, legal and injection all outrank the GDPR
+								// branch in Tighten's switch (checked first) — when one
+								// of those is present, the data-request exception to
+								// the no-relax rule does not apply; the stricter signal
+								// wins and the ordinary no-relax check still holds.
+								higherPriority := slices.Contains(sig, SignalSelfHarm) || slices.Contains(sig, SignalLegal) ||
+									slices.Contains(sig, SignalInjection) || intent == domain.IntentLegal
+								isDataRequest := !higherPriority && (slices.Contains(sig, SignalDataRequest) || intent == domain.IntentAccountData)
+								if !isDataRequest && domain.Stricter(a, out.Autonomy) != out.Autonomy {
 									t.Fatalf("relaxed: in=%s signals=%v mode=%s intent=%s emotion=%s conf=%v recent=%d -> out=%s",
 										a, sig, mode, intent, emotion, conf, recent, out.Autonomy)
+								}
+								if isDataRequest && out.Rule != "G_data_request" {
+									t.Fatalf("data request case did not land on G_data_request: in=%s signals=%v intent=%s -> rule=%s autonomy=%s",
+										a, sig, intent, out.Rule, out.Autonomy)
 								}
 								cases++
 							}
