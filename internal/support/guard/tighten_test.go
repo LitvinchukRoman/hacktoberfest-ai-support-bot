@@ -116,6 +116,36 @@ func TestTighten(t *testing.T) {
 	}
 }
 
+// TestHighRiskActionNeverAutoExecutes is the specific guarantee a buggy or
+// compromised policy must never be able to break: restore_idea and
+// data_request are never auto-executed, even if the policy itself proposed
+// autonomy=auto for them (which it never should, but Tighten doesn't trust
+// that — it enforces the floor independently).
+func TestHighRiskActionNeverAutoExecutes(t *testing.T) {
+	tests := []struct {
+		name   string
+		action domain.ActionType
+	}{
+		{"restore_idea", domain.ActRestoreIdea},
+		{"data_request", domain.ActDataRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := Input{
+				Decision: domain.Decision{
+					Autonomy: domain.AutonomyAuto, Rule: "SOME_POLICY_RULE", Status: domain.StatusSolved,
+					Actions: []domain.Action{{Type: tt.action}},
+				},
+				Class: domain.Classification{Confidence: 0.9},
+			}
+			got := Tighten(in, DefaultConfig)
+			if got.Autonomy == domain.AutonomyAuto {
+				t.Fatalf("%s got autonomy=auto, want at least approve — a policy bug must not auto-execute this", tt.action)
+			}
+		})
+	}
+}
+
 func TestEscalateClearsActionsAndSuggestions(t *testing.T) {
 	in := Input{
 		Decision: domain.Decision{

@@ -72,12 +72,37 @@ func Tighten(in Input, cfg Config) domain.Decision {
 		out.Autonomy, out.Status = domain.AutonomyApprove, domain.StatusAwaitingApproval
 	}
 
+	// Hard floor, independent of whatever policy proposed: an irreversible
+	// or money/rights-changing action is never auto-executed. This does not
+	// trust the policy test suite's own invariant — it enforces the same
+	// guarantee again here, on the Ops side.
+	if out.Autonomy == domain.AutonomyAuto && hasHighRiskAction(out.Actions) {
+		out.Autonomy, out.Status = domain.AutonomyApprove, domain.StatusAwaitingApproval
+	}
+
 	if domain.Stricter(d.Autonomy, out.Autonomy) != out.Autonomy {
 		// The candidate would relax what policy already decided — never
 		// allowed, fall back to the original decision untouched.
 		return d
 	}
 	return out
+}
+
+// highRiskActions never auto-execute, no matter what autonomy a policy
+// proposes: restoring content overrides a moderator's prior call, and a
+// GDPR action touches the customer's rights. Both require a human.
+var highRiskActions = map[domain.ActionType]bool{
+	domain.ActRestoreIdea: true,
+	domain.ActDataRequest: true,
+}
+
+func hasHighRiskAction(actions []domain.Action) bool {
+	for _, a := range actions {
+		if highRiskActions[a.Type] {
+			return true
+		}
+	}
+	return false
 }
 
 // escalate builds an escalated decision: rule gets a G_ prefix, actions and
