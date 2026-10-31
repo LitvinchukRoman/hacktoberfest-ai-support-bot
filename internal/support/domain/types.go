@@ -200,8 +200,10 @@ type IdeaFacts struct {
 	ID             string
 	Slug           string
 	Title          string
+	Status         string // DRAFT | OPEN | ... (ideas.status); a draft is not waiting for anyone
 	Moderation     string // PENDING | APPROVED | HIDDEN | REJECTED
 	Visibility     string // PUBLIC | MEMBERS_ONLY | ORGANIZATION_ONLY
+	CreatedAt      time.Time
 	CaseSource     string
 	CaseOpenedAt   time.Time
 	DecidedByHuman bool

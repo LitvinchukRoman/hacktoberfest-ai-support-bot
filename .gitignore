@@ -1,0 +1,11 @@
+.DS_Store
+.vscode/
+
+# Env: real values never go to git, the example stays.
+.env
+.env.*
+!.env.example
+
+*.exe
+*.test
+*.log
