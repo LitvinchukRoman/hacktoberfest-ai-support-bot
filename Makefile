@@ -1,15 +1,6 @@
 DATABASE_URL ?= postgres://postgres:postgres@localhost:15432/skelar?sslmode=disable
 TEST_DATABASE_URL ?= postgres://postgres:postgres@localhost:15432/skelar?sslmode=disable
 
-# Deterministic pitch: real HTTP handlers, PostgreSQL and worker; offline model.
-# Only the three demo scenarios, not the full audit suite. No API key required.
-.PHONY: pitch
-pitch:
-	@echo "OPS2 demo: HTTP → PostgreSQL queue → worker → response"
-	@echo "Offline classifier and templates; no Gemma/API key required."
-	@echo "Scenarios: resolved request, human handoff + email redaction, prompt injection."
-	@$(MAKE) --no-print-directory test-ops2
-
 # Real HTTP handlers + Postgres queue + worker; isolated schema, no API key.
 .PHONY: test-ops2
 test-ops2:
