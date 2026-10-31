@@ -153,27 +153,6 @@ func (s *Service) processTicket(ctx context.Context, ticketID string) error {
 		return nil
 	}
 
-	// Once a human owns the conversation (escalated, or a risky action is
-	// pending their approve/reject), automation never un-escalates it on
-	// its own. Without this, a follow-up as mundane as "Дякую" after a
-	// human-request/legal/self-harm escalation would re-run the full
-	// classify->decide pipeline and could flip the ticket straight back to
-	// solved/auto — silently handing a case back to the bot that a person
-	// is supposed to be looking at. New messages are just marked seen;
-	// staff see them via the ticket's trace/messages, and only an explicit
-	// Approve/Reject or a staff reply moves the ticket on.
-	if ticket.Status == domain.StatusEscalated || ticket.Status == domain.StatusAwaitingApproval {
-		ids := make([]string, len(msgs))
-		for i, m := range msgs {
-			ids[i] = m.ID
-		}
-		if err := s.Store.MarkProcessed(ctx, ids); err != nil {
-			return fmt.Errorf("mark processed (escalated ticket): %w", err)
-		}
-		s.trace(ctx, ticketID, "route", "Ти вже в черзі на людину, нове повідомлення теж передане.", map[string]any{"status": ticket.Status})
-		return nil
-	}
-
 	sig, pii := aggregateSignals(msgs)
 	s.trace(ctx, ticketID, "prefilter", "Перевіряю повідомлення…", map[string]any{"signals": sig, "pii": pii})
 
