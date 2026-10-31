@@ -1,7 +1,7 @@
 DATABASE_URL ?= postgres://postgres:postgres@localhost:15432/skelar?sslmode=disable
 TEST_DATABASE_URL ?= postgres://postgres:postgres@localhost:15432/skelar?sslmode=disable
 
-.PHONY: build test test-integration test-all vet fmt lint migrate-up migrate-down db-up db-down db-reset run
+.PHONY: support-eval support-kb build test test-integration test-all vet fmt lint migrate-up migrate-down db-up db-down db-reset run
 
 build:
 	go build ./...
@@ -41,3 +41,11 @@ db-down:
 	docker compose down -v
 
 db-reset: migrate-down migrate-up
+
+# Classifier accuracy on the goldset. ARGS=-fake (keywords), ARGS=-smoke (what Gemma accepts), or empty (the model).
+support-eval:
+	go run ./cmd/support-eval $(ARGS)
+
+# Rebuild the knowledge base from fantasm's articles: make support-kb FRONTEND=../fantasm/frontend
+support-kb:
+	go run ./cmd/support-kb $(FRONTEND)/content

@@ -1,11 +1,9 @@
 // Command server wires the Backend-2 (Ops) pipeline end to end: intake,
 // Postgres job queue, orchestrator, approvals, SSE stream and admin API.
 //
-// The Classifier/FactsSource/Renderer/Decide below are a placeholder
-// domain.Brain, NOT Backend 1's real policy/classifier/facts/render —
-// those are out of scope here. The placeholder always escalates, so the
-// safety invariants (nothing auto-executes without a real policy) hold
-// even before B1's Brain exists; swap it out when B1's package is ready.
+// The domain.Brain comes from internal/support/brain: Gemma 4 when GEMINI_API_KEY
+// is set, otherwise the offline keyword classifier and templates. Whenever the
+// model fails, the orchestrator answers with the keyword classifier instead.
 package main
 
 import (
@@ -26,7 +24,10 @@ import (
 	"github.com/handziurdmytro/skelar/internal/support"
 	"github.com/handziurdmytro/skelar/internal/support/adapters/httpapi"
 	"github.com/handziurdmytro/skelar/internal/support/adapters/postgres"
-	"github.com/handziurdmytro/skelar/internal/support/domain"
+	"github.com/handziurdmytro/skelar/internal/support/brain"
+	"github.com/handziurdmytro/skelar/internal/support/facts"
+	"github.com/handziurdmytro/skelar/internal/support/kb"
+	"github.com/handziurdmytro/skelar/internal/support/llm"
 	"github.com/handziurdmytro/skelar/internal/support/stream"
 )
 
@@ -51,11 +52,21 @@ func main() {
 	settingsStore := settings.New(store)
 	moderationSvc := &moderation.Service{DB: store}
 
+	guides, err := kb.Default()
+	if err != nil {
+		log.Fatalf("knowledge base: %v", err)
+	}
+	brainCfg := brain.FromEnv()
+	aiBrain, err := brain.New(ctx, brainCfg, facts.NewPostgres(pool, guides))
+	if err != nil {
+		log.Fatalf("brain: %v", err)
+	}
+
 	svc := &support.Service{
 		Store:         store,
 		Broker:        broker,
-		Brain:         placeholderBrain(),
-		Fallback:      placeholderClassifier{},
+		Brain:         aiBrain,
+		Fallback:      llm.Fake{},
 		Moderation:    moderationSvc,
 		Mode:          support.ModeFromSettings(settingsStore),
 		RetentionDays: retentionDays,
@@ -101,7 +112,7 @@ func main() {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	slog.Info("support server listening", "port", port, "devTools", devTools)
+	slog.Info("support server listening", "port", port, "devTools", devTools, "model", map[bool]string{true: "offline keyword bot", false: brainCfg.LLM.ClassifierModel}[brainCfg.Fake])
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("serve: %v", err)
 	}
@@ -138,42 +149,6 @@ func authorize(store *postgres.Store) func(r *http.Request, ticketID string) (st
 			return false, true
 		}
 		return false, false
-	}
-}
-
-// placeholderClassifier always returns unknown/low-confidence, which
-// guard.Tighten escalates — see the package doc comment above.
-type placeholderClassifier struct{}
-
-func (placeholderClassifier) Classify(_ context.Context, _ domain.ClassifyInput) (domain.Classification, domain.Usage, error) {
-	return domain.Classification{Intent: domain.IntentUnknown, Language: "uk"}, domain.Usage{Model: "placeholder"}, nil
-}
-
-type placeholderFacts struct{}
-
-func (placeholderFacts) Facts(_ context.Context, in domain.FactsInput) (domain.Facts, error) {
-	return domain.Facts{Now: in.Now, State: in.State}, nil
-}
-
-type placeholderRenderer struct{}
-
-func (placeholderRenderer) Render(_ context.Context, _ domain.RenderInput) (string, domain.Usage, error) {
-	return "Дякуємо за звернення! Я передав його нашій команді, відповідь прийде сюди.", domain.Usage{Model: "placeholder"}, nil
-}
-
-func placeholderDecide(c domain.Classification, _ domain.Facts) domain.Decision {
-	return domain.Decision{
-		Autonomy: domain.AutonomyEscalate, Rule: "P0_operations_intent", TemplateID: "escalation.generic",
-		Status: domain.StatusEscalated, Escalation: &domain.Escalation{Reason: string(c.Intent), Queue: domain.QueueAdmins, Priority: 3},
-	}
-}
-
-func placeholderBrain() domain.Brain {
-	return domain.Brain{
-		Classifier: placeholderClassifier{},
-		Facts:      placeholderFacts{},
-		Decide:     placeholderDecide,
-		Renderer:   placeholderRenderer{},
 	}
 }
 
