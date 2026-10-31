@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/handziurdmytro/skelar/internal/moderation"
 	"github.com/handziurdmytro/skelar/internal/support/domain"
 	"github.com/handziurdmytro/skelar/internal/support/guard"
 	"github.com/handziurdmytro/skelar/internal/support/ports"
@@ -28,12 +29,13 @@ type Store interface {
 }
 
 type Service struct {
-	Store    Store
-	Broker   *stream.Broker
-	Brain    domain.Brain
-	Fallback domain.Classifier
-	Mode     func(ctx context.Context) guard.Mode
-	Now      func() time.Time
+	Store      Store
+	Broker     *stream.Broker
+	Brain      domain.Brain
+	Fallback   domain.Classifier
+	Moderation *moderation.Service
+	Mode       func(ctx context.Context) guard.Mode
+	Now        func() time.Time
 }
 
 // appendEvent persists the event and schedules its broadcast for right

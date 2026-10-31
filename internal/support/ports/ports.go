@@ -205,6 +205,11 @@ type ActionRepo interface {
 	// (e.g. the dirty-requeue path reprocessing the same decision) is a
 	// silent no-op.
 	InsertAction(ctx context.Context, in NewActionInput) error
+	GetAction(ctx context.Context, id string) (Action, bool, error)
+	// ClaimApprove/ClaimReject only affect a row still 'pending' (ok=false
+	// otherwise) — a double click on Approve/Reject can never decide twice.
+	ClaimApprove(ctx context.Context, id, decidedBy, editedReply string) (Action, bool, error)
+	ClaimReject(ctx context.Context, id, decidedBy, reason string) (Action, bool, error)
 }
 
 type DataRequestKind string
