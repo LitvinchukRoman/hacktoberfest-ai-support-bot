@@ -45,7 +45,7 @@ func decodeInboxCursor(s string) (*inboxCursor, error) {
 }
 
 const ticketColumns = `id, user_id, anon_key_hash, contact_email, status, autonomy, intent, emotion,
-	language, priority, queue, escalation_reason, idea_id, page, flow, flow_step, last_seq,
+	language, priority, queue, escalation_reason, idea_id, idea_slug, page, flow, flow_step, last_seq,
 	first_reply_at, solved_at, created_at, updated_at`
 
 func scanTicket(row pgx.Row) (ports.Ticket, error) {
@@ -58,7 +58,7 @@ func scanTicket(row pgx.Row) (ports.Ticket, error) {
 	)
 	if err := row.Scan(
 		&t.ID, &t.UserID, &t.AnonKeyHash, &contactEmail, &status, &autonomy, &intent, &emotion,
-		&language, &priority, &queue, &reason, &t.IdeaID, &t.Page, &flow, &flowStep, &t.LastSeq,
+		&language, &priority, &queue, &reason, &t.IdeaID, &t.IdeaSlug, &t.Page, &flow, &flowStep, &t.LastSeq,
 		&t.FirstReplyAt, &t.SolvedAt, &t.CreatedAt, &t.UpdatedAt,
 	); err != nil {
 		return ports.Ticket{}, err
@@ -88,10 +88,10 @@ func scanTicket(row pgx.Row) (ports.Ticket, error) {
 
 func (s *Store) Create(ctx context.Context, in ports.NewTicketInput) (ports.Ticket, error) {
 	row := s.q(ctx).QueryRow(ctx, `
-		INSERT INTO support_tickets (id, user_id, anon_key_hash, contact_email, page)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO support_tickets (id, user_id, anon_key_hash, contact_email, page, idea_slug)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING `+ticketColumns,
-		in.ID, in.UserID, in.AnonKeyHash, nullIfEmpty(in.ContactEmail), in.Page,
+		in.ID, in.UserID, in.AnonKeyHash, nullIfEmpty(in.ContactEmail), in.Page, in.IdeaSlug,
 	)
 	return scanTicket(row)
 }

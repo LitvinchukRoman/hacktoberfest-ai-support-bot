@@ -8,7 +8,7 @@ import (
 	"github.com/handziurdmytro/skelar/internal/support/ports"
 )
 
-const messageColumns = `id, ticket_id, author, agent_id, visibility, body, actions, pii_found, processed_at, created_at`
+const messageColumns = `id, ticket_id, author, agent_id, visibility, body, actions, pii_found, signals, processed_at, created_at`
 
 // rowScanner is satisfied by both pgx.Row (QueryRow) and pgx.Rows/
 // CollectableRow (Query + CollectRows) — scanMessage works for either.
@@ -19,7 +19,7 @@ type rowScanner interface {
 func scanMessage(row rowScanner) (ports.Message, error) {
 	var m ports.Message
 	if err := row.Scan(
-		&m.ID, &m.TicketID, &m.Author, &m.AgentID, &m.Visibility, &m.Body, &m.Actions, &m.PIIFound,
+		&m.ID, &m.TicketID, &m.Author, &m.AgentID, &m.Visibility, &m.Body, &m.Actions, &m.PIIFound, &m.Signals,
 		&m.ProcessedAt, &m.CreatedAt,
 	); err != nil {
 		return ports.Message{}, err
@@ -30,17 +30,18 @@ func scanMessage(row rowScanner) (ports.Message, error) {
 // Insert stores a message whose Body is already redacted — callers must
 // run guard.Redact before this, never the raw customer text.
 func (s *Store) Insert(ctx context.Context, in ports.NewMessageInput) (ports.Message, error) {
-	piiFound := in.PIIFound
+	piiFound, signals := in.PIIFound, in.Signals
 	if piiFound == nil {
-		// A nil slice would bind as SQL NULL, overriding the column's
-		// NOT NULL DEFAULT '{}' instead of falling back to it.
 		piiFound = []string{}
 	}
+	if signals == nil {
+		signals = []string{}
+	}
 	row := s.q(ctx).QueryRow(ctx, `
-		INSERT INTO support_messages (id, ticket_id, author, body, pii_found)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO support_messages (id, ticket_id, author, body, pii_found, signals)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING `+messageColumns,
-		in.ID, in.TicketID, in.Author, in.Body, piiFound,
+		in.ID, in.TicketID, in.Author, in.Body, piiFound, signals,
 	)
 	return scanMessage(row)
 }

@@ -26,6 +26,7 @@ type Ticket struct {
 	Queue            *domain.Queue
 	EscalationReason string
 	IdeaID           *string
+	IdeaSlug         string
 	Page             string
 	State            domain.ConversationState
 	LastSeq          int64
@@ -58,6 +59,7 @@ type Message struct {
 	Body        string
 	Actions     json.RawMessage // []domain.SuggestedAction, as stored
 	PIIFound    []string
+	Signals     []string
 	ProcessedAt *time.Time
 	CreatedAt   time.Time
 }
@@ -81,6 +83,7 @@ type NewTicketInput struct {
 	AnonKeyHash  []byte
 	ContactEmail string
 	Page         string
+	IdeaSlug     string
 }
 
 // NewMessageInput is what intake needs to append a customer message to an
@@ -92,6 +95,7 @@ type NewMessageInput struct {
 	Author   string
 	Body     string // already redacted
 	PIIFound []string
+	Signals  []string // guard.Detect, run on the raw text before it's discarded
 }
 
 type TicketRepo interface {
