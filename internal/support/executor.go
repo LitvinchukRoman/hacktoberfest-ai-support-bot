@@ -151,7 +151,7 @@ func (s *Service) recordAction(ctx context.Context, t ports.Ticket, final domain
 		decidedAt = &now
 	}
 
-	return s.Store.InsertAction(ctx, ports.NewActionInput{
+	if err := s.Store.InsertAction(ctx, ports.NewActionInput{
 		ID:             newID(),
 		TicketID:       t.ID,
 		Type:           a.Type,
@@ -163,7 +163,14 @@ func (s *Service) recordAction(ctx context.Context, t ports.Ticket, final domain
 		Evidence:       evidence,
 		DraftReply:     reply,
 		DecidedAt:      decidedAt,
-	})
+	}); err != nil {
+		return err
+	}
+
+	if a.Type == domain.ActDataRequest {
+		return s.createDataRequest(ctx, t, a)
+	}
+	return nil
 }
 
 func firstActionQueue(actions []domain.Action) domain.Queue {

@@ -22,6 +22,7 @@ type Store interface {
 	ports.JobQueue
 	ports.ActionRepo
 	ports.DecisionRepo
+	ports.DataRequestRepo
 	ports.TxManager
 }
 
