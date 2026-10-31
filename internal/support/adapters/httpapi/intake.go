@@ -178,6 +178,20 @@ func (h *Intake) PostMessage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"ticketId": ticketID, "messageId": messageID})
 }
 
+// ResolveOwnerReadOnly is resolveOwner without the cookie-minting side
+// effect, for read-only checks (SSE Authorize, ticket snapshot) that
+// shouldn't hand out a new anonymous identity just to deny it a page later.
+func ResolveOwnerReadOnly(r *http.Request) (userID string, anonKeyHash []byte) {
+	if v, ok := ViewerFromContext(r.Context()); ok {
+		return v.ID, nil
+	}
+	if c, err := r.Cookie(anonCookieName); err == nil && c.Value != "" {
+		hash := sha256.Sum256([]byte(c.Value))
+		return "", hash[:]
+	}
+	return "", nil
+}
+
 // resolveOwner returns the caller's user id (if a Viewer is present in the
 // request context) or an anonymous key hash derived from the fantasm_support
 // cookie, minting a new one if absent. setCookie is non-nil only when a new

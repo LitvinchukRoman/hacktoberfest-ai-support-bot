@@ -30,7 +30,7 @@ func (h *Intake) GetTicket(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	ctx := r.Context()
 
-	userID, anonKeyHash, _ := h.resolveOwner(r)
+	userID, anonKeyHash := ResolveOwnerReadOnly(r)
 	ticket, ok, err := h.Store.Get(ctx, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "failed to load ticket")

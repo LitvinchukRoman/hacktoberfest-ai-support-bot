@@ -90,12 +90,14 @@ type NewTicketInput struct {
 // existing or brand-new ticket, inside a single transaction with the
 // enqueue and the trace event.
 type NewMessageInput struct {
-	ID       string
-	TicketID string
-	Author   string
-	Body     string // already redacted
-	PIIFound []string
-	Signals  []string // guard.Detect, run on the raw text before it's discarded
+	ID         string
+	TicketID   string
+	Author     string
+	AgentID    *string // set for author=agent
+	Visibility string  // public | internal; "" defaults to public
+	Body       string  // already redacted
+	PIIFound   []string
+	Signals    []string // guard.Detect, run on the raw text before it's discarded
 }
 
 type TicketRepo interface {

@@ -37,11 +37,15 @@ func (s *Store) Insert(ctx context.Context, in ports.NewMessageInput) (ports.Mes
 	if signals == nil {
 		signals = []string{}
 	}
+	visibility := in.Visibility
+	if visibility == "" {
+		visibility = "public"
+	}
 	row := s.q(ctx).QueryRow(ctx, `
-		INSERT INTO support_messages (id, ticket_id, author, body, pii_found, signals)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO support_messages (id, ticket_id, author, agent_id, visibility, body, pii_found, signals)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING `+messageColumns,
-		in.ID, in.TicketID, in.Author, in.Body, piiFound, signals,
+		in.ID, in.TicketID, in.Author, in.AgentID, visibility, in.Body, piiFound, signals,
 	)
 	return scanMessage(row)
 }

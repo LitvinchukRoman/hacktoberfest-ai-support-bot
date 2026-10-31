@@ -37,6 +37,19 @@ func (b *Broker) Subscribe(ticketID string) (<-chan ports.Event, func()) {
 	}
 }
 
+// Reset drops every subscriber — used by the dev-reset endpoint after
+// truncating support_* so stale connections don't linger on old state.
+func (b *Broker) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, subs := range b.subs {
+		for ch := range subs {
+			close(ch)
+		}
+	}
+	b.subs = map[string]map[chan ports.Event]struct{}{}
+}
+
 func (b *Broker) Publish(e ports.Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
