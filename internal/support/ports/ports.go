@@ -207,6 +207,49 @@ type ActionRepo interface {
 	InsertAction(ctx context.Context, in NewActionInput) error
 }
 
+type DataRequestKind string
+
+const (
+	DataRequestAccess        DataRequestKind = "access"
+	DataRequestErasure       DataRequestKind = "erasure"
+	DataRequestRectification DataRequestKind = "rectification"
+	DataRequestObjection     DataRequestKind = "objection"
+)
+
+// DataRequest mirrors the support_data_requests row. It survives account
+// deletion (ticket_id/user_id go to NULL, the row itself stays) so that
+// handling a GDPR request remains provable after the fact.
+type DataRequest struct {
+	ID          string
+	TicketID    *string
+	UserID      *string
+	Kind        DataRequestKind
+	Status      string // received | completed | rejected
+	DueAt       time.Time
+	DecidedBy   *string
+	Note        *string
+	CompletedAt *time.Time
+	CreatedAt   time.Time
+}
+
+type NewDataRequestInput struct {
+	ID       string
+	TicketID *string
+	UserID   *string
+	Kind     DataRequestKind
+	DueAt    time.Time
+}
+
+type DataRequestRepo interface {
+	CreateDataRequest(ctx context.Context, in NewDataRequestInput) (DataRequest, error)
+	GetDataRequest(ctx context.Context, id string) (DataRequest, bool, error)
+	ListOpen(ctx context.Context) ([]DataRequest, error)
+	// Complete is a conditional UPDATE: it only affects a row that is still
+	// 'received', so completing twice is a no-op (ok=false) rather than
+	// overwriting who/when it was actually handled.
+	Complete(ctx context.Context, id string, decidedBy string, note string) (ok bool, err error)
+}
+
 // TxManager runs fn inside a single database transaction. Repos pick the
 // active transaction up from ctx, so WithinTx composes freely: a handler
 // can call Tickets().Create, Messages().Insert and Events().Append inside

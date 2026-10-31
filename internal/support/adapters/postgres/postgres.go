@@ -13,13 +13,14 @@ import (
 )
 
 var (
-	_ ports.TicketRepo   = (*Store)(nil)
-	_ ports.MessageRepo  = (*Store)(nil)
-	_ ports.EventRepo    = (*Store)(nil)
-	_ ports.JobQueue     = (*Store)(nil)
-	_ ports.ActionRepo   = (*Store)(nil)
-	_ ports.DecisionRepo = (*Store)(nil)
-	_ ports.TxManager    = (*Store)(nil)
+	_ ports.TicketRepo      = (*Store)(nil)
+	_ ports.MessageRepo     = (*Store)(nil)
+	_ ports.EventRepo       = (*Store)(nil)
+	_ ports.JobQueue        = (*Store)(nil)
+	_ ports.ActionRepo      = (*Store)(nil)
+	_ ports.DecisionRepo    = (*Store)(nil)
+	_ ports.DataRequestRepo = (*Store)(nil)
+	_ ports.TxManager       = (*Store)(nil)
 )
 
 // Store implements every ports interface (TicketRepo, MessageRepo,
