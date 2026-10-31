@@ -65,6 +65,14 @@ func (s *Store) ClaimApprove(ctx context.Context, id, decidedBy, editedReply str
 	return a, true, nil
 }
 
+func (s *Store) ListPendingForTicket(ctx context.Context, ticketID string) ([]ports.Action, error) {
+	rows, err := s.q(ctx).Query(ctx, `SELECT `+actionColumns+` FROM support_actions WHERE ticket_id = $1 AND status = 'pending'`, ticketID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (ports.Action, error) { return scanAction(row) })
+}
+
 func (s *Store) ClaimReject(ctx context.Context, id, decidedBy, reason string) (ports.Action, bool, error) {
 	row := s.q(ctx).QueryRow(ctx, `
 		UPDATE support_actions SET status = 'rejected', decided_by = $2, decided_at = now(), reason = $3

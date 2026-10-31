@@ -210,6 +210,7 @@ type ActionRepo interface {
 	// otherwise) — a double click on Approve/Reject can never decide twice.
 	ClaimApprove(ctx context.Context, id, decidedBy, editedReply string) (Action, bool, error)
 	ClaimReject(ctx context.Context, id, decidedBy, reason string) (Action, bool, error)
+	ListPendingForTicket(ctx context.Context, ticketID string) ([]Action, error)
 }
 
 type DataRequestKind string

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/handziurdmytro/skelar/internal/moderation"
+	"github.com/handziurdmytro/skelar/internal/platform/settings"
 	"github.com/handziurdmytro/skelar/internal/support/domain"
 	"github.com/handziurdmytro/skelar/internal/support/guard"
 	"github.com/handziurdmytro/skelar/internal/support/ports"
@@ -286,3 +287,22 @@ func (s *Service) trace(ctx context.Context, ticketID, stage, summary string, da
 }
 
 func newID() string { return uuid.NewString() }
+
+const SettingsKeySupportMode = "support_mode"
+
+// ModeFromSettings reads the support_mode kill switch from settings,
+// defaulting to standard for an unset or unrecognized value.
+func ModeFromSettings(store *settings.Store) func(context.Context) guard.Mode {
+	return func(ctx context.Context) guard.Mode {
+		v, err := store.Get(ctx, SettingsKeySupportMode)
+		if err != nil {
+			return guard.ModeStandard
+		}
+		switch guard.Mode(v) {
+		case guard.ModeApproveAll, guard.ModeShadow, guard.ModeStandard:
+			return guard.Mode(v)
+		default:
+			return guard.ModeStandard
+		}
+	}
+}
