@@ -104,6 +104,7 @@ type TicketRepo interface {
 	// ListInbox returns staff-facing tickets, newest-priority first, cursor-paginated.
 	ListInbox(ctx context.Context, status string, cursor string, limit int) ([]Ticket, string, error)
 	UpdateAfterDecision(ctx context.Context, t Ticket) error
+	PurgeSolvedBefore(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
 type MessageRepo interface {
@@ -198,6 +199,7 @@ type NewDecisionInput struct {
 
 type DecisionRepo interface {
 	InsertDecision(ctx context.Context, in NewDecisionInput) error
+	PurgeBefore(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
 type ActionRepo interface {
@@ -254,6 +256,23 @@ type DataRequestRepo interface {
 	// 'received', so completing twice is a no-op (ok=false) rather than
 	// overwriting who/when it was actually handled.
 	Complete(ctx context.Context, id string, decidedBy string, note string) (ok bool, err error)
+}
+
+type Metrics struct {
+	TicketsTotal         int
+	AutoResolvedPct      float64
+	EscalatedPct         float64
+	AwaitingApproval     int
+	MedianFirstReplySec  float64
+	AcceptedUnchangedPct float64
+	HoursSaved           float64
+	Intents              map[string]int
+	EscalationsByReason  map[string]int
+	TotalTokens          int
+}
+
+type MetricsRepo interface {
+	Metrics(ctx context.Context, since time.Time, avgHandleMin float64) (Metrics, error)
 }
 
 // TxManager runs fn inside a single database transaction. Repos pick the

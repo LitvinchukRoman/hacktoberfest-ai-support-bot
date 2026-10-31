@@ -20,6 +20,7 @@ var (
 	_ ports.ActionRepo      = (*Store)(nil)
 	_ ports.DecisionRepo    = (*Store)(nil)
 	_ ports.DataRequestRepo = (*Store)(nil)
+	_ ports.MetricsRepo     = (*Store)(nil)
 	_ ports.TxManager       = (*Store)(nil)
 )
 

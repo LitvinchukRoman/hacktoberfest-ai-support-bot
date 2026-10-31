@@ -30,13 +30,14 @@ type Store interface {
 }
 
 type Service struct {
-	Store      Store
-	Broker     *stream.Broker
-	Brain      domain.Brain
-	Fallback   domain.Classifier
-	Moderation *moderation.Service
-	Mode       func(ctx context.Context) guard.Mode
-	Now        func() time.Time
+	Store         Store
+	Broker        *stream.Broker
+	Brain         domain.Brain
+	Fallback      domain.Classifier
+	Moderation    *moderation.Service
+	Mode          func(ctx context.Context) guard.Mode
+	Now           func() time.Time
+	RetentionDays int
 }
 
 // appendEvent persists the event and schedules its broadcast for right

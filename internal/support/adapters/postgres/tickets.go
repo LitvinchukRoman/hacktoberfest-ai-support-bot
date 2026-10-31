@@ -193,3 +193,11 @@ func (s *Store) ListInbox(ctx context.Context, status string, cursor string, lim
 	}
 	return tickets, next, nil
 }
+
+func (s *Store) PurgeSolvedBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	tag, err := s.q(ctx).Exec(ctx, `DELETE FROM support_tickets WHERE status = 'solved' AND solved_at < $1`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}

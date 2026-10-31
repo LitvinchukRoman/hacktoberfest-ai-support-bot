@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"time"
 
 	"github.com/handziurdmytro/skelar/internal/support/ports"
 )
@@ -15,4 +16,12 @@ func (s *Store) InsertDecision(ctx context.Context, in ports.NewDecisionInput) e
 		in.Decision, in.Checks, in.Model, in.PromptTokens, in.CompletionTokens, in.LatencyMS,
 	)
 	return err
+}
+
+func (s *Store) PurgeBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	tag, err := s.q(ctx).Exec(ctx, `DELETE FROM support_decisions WHERE created_at < $1`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
