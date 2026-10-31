@@ -5,6 +5,7 @@ package llm
 import (
 	"context"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -31,6 +32,9 @@ var fakeRules = []keywordRule{
 	{domain.IntentVerificationSeal, []string{"печатк", "верифік", "могилянц", "badge", "verified"}},
 	{domain.IntentLoginProblem, []string{"aadsts", "не можу увійти", "не можу зайти", "не виходить увійти", "can't log in", "cannot log in", "can't sign in"}},
 	{domain.IntentNotificationsIssue, []string{"сповіщен", "push", "notification"}},
+	{domain.IntentBillingRefund, []string{"поверніть гроші", "поверніть кошти", "повернути гроші", "повернути кошти", "повернення коштів", "повернення грошей", "двічі списал", "подвійне списання", "списали двічі", "refund", "money back"}},
+	{domain.IntentBillingCancel, []string{"скасу", "відпиш", "відписат", "відмовитися від", "відмовитись від", "не хочу платити", "дорого", "cancel", "unsubscribe"}},
+	{domain.IntentBillingQuestion, []string{"тариф", "підписк", "спонсорств", "оплат", "списал", "«плюс»", "«про»", "pricing", "subscription", "billing"}},
 	{domain.IntentRoleRequest, []string{"модератором", "адміном", "адміністратором", "права модератора", "make me admin", "become a moderator"}},
 	{domain.IntentHowTo, []string{"як знайти", "як створити", "як написати", "як додати", "як подати", "how do i", "how to"}},
 	{domain.IntentThanksResolved, []string{"дякую", "спасибі", "thanks", "thank you"}},
@@ -64,6 +68,9 @@ func (Fake) Classify(_ context.Context, in domain.ClassifyInput) (domain.Classif
 			break
 		}
 	}
+	if in.State.Flow == domain.FlowRetention {
+		retentionReply(&c, lower)
+	}
 	if code := errorCodePattern.FindString(text); code != "" {
 		c.ErrorCode = strings.ToUpper(code)
 	}
@@ -84,6 +91,35 @@ func (Fake) Classify(_ context.Context, in domain.ClassifyInput) (domain.Classif
 		c.Emotion = domain.EmotionConfused
 	}
 	return c, domain.Usage{Model: FakeModel}, nil
+}
+
+var (
+	declinePhrases = []string{"не хочу", "все одно", "всеодно", "не підходить", "не треба", "не цікав", "no thanks"}
+	declineWords   = []string{"ні", "нє", "no", "nope"}
+	acceptPhrases  = []string{"лишаюсь", "лишаюся", "залишаюсь", "залишаюся", "залишусь", "лишуся", "підходить", "згоден", "згодна"}
+	acceptWords    = []string{"так", "ок", "ok", "yes", "давай", "добре"}
+)
+
+// retentionReply reads a short answer to an offer to stay. "Ні, дякую" is a refusal
+// even though it thanks; a bare "так" is a yes only when nothing else matched.
+func retentionReply(c *domain.Classification, lower string) {
+	words := strings.FieldsFunc(lower, func(r rune) bool { return !unicode.IsLetter(r) && r != '\'' })
+	hasWord := func(set []string) bool {
+		for _, w := range words {
+			if slices.Contains(set, w) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case contains(lower, declinePhrases) || hasWord(declineWords):
+		if c.Intent == domain.IntentUnknown || c.Intent == domain.IntentThanksResolved {
+			c.Intent, c.Confidence, c.Reasoning = domain.IntentBillingCancel, 0.8, "declines the offer to stay"
+		}
+	case c.Intent == domain.IntentUnknown && (contains(lower, acceptPhrases) || hasWord(acceptWords)):
+		c.Intent, c.Confidence, c.Reasoning = domain.IntentThanksResolved, 0.8, "accepts the offer to stay"
+	}
 }
 
 func firstContained(s string, needles []string) (string, bool) {

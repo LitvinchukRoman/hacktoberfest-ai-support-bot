@@ -22,7 +22,10 @@ var (
 	internalTermRe = regexp.MustCompile(`(?i)\b[A-Z][0-9]*_[A-Za-z]+|confidence|classifier|system prompt|промпт|policy|правило\s*[A-Z][0-9]`)
 	// Phrases that claim an action already happened — only acceptable when
 	// the decision is auto (the action really did run synchronously).
-	overpromiseRe = regexp.MustCompile(`(?i)відновив|відновлено|видалено|змінив роль|змінено роль`)
+	overpromiseRe = regexp.MustCompile(`(?i)відновив|відновлено|видалено|змінив роль|змінено роль|додав тобі|продовжив тобі|днів додано`)
+	// The bot never cancels a subscription or returns money, so no reply may say it
+	// did, whatever the autonomy. No \b: in Go it only knows ASCII letters.
+	billingPromiseRe = regexp.MustCompile(`(?i)скасовано|скасував|скасувала|скасували|кошти повернуто|гроші повернуто|кошти повернено|повернув кошти|повернула кошти|повернув гроші|повернули кошти|повернули гроші`)
 )
 
 // Validate is the last filter before a reply reaches a customer. Any failed
@@ -37,6 +40,7 @@ func Validate(reply string, d domain.Decision) (bool, []Check) {
 		{"no_template_leftovers", !templateLeftoverRe.MatchString(reply)},
 		{"no_external_links", !externalLinkRe.MatchString(reply)},
 		{"no_overpromise", !overpromiseRe.MatchString(reply) || d.Autonomy == domain.AutonomyAuto},
+		{"no_billing_promise", !billingPromiseRe.MatchString(reply)},
 	}
 
 	ok := true

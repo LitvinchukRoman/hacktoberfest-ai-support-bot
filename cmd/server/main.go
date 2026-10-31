@@ -24,16 +24,22 @@ import (
 	"github.com/handziurdmytro/skelar/internal/support"
 	"github.com/handziurdmytro/skelar/internal/support/adapters/httpapi"
 	"github.com/handziurdmytro/skelar/internal/support/adapters/postgres"
+	"github.com/handziurdmytro/skelar/internal/support/billing"
 	"github.com/handziurdmytro/skelar/internal/support/brain"
+	"github.com/handziurdmytro/skelar/internal/support/domain"
 	"github.com/handziurdmytro/skelar/internal/support/facts"
+	"github.com/handziurdmytro/skelar/internal/support/identity"
 	"github.com/handziurdmytro/skelar/internal/support/kb"
 	"github.com/handziurdmytro/skelar/internal/support/llm"
 	"github.com/handziurdmytro/skelar/internal/support/stream"
+	"github.com/handziurdmytro/skelar/migrations"
 )
 
 func main() {
 	databaseURL := requireEnv("DATABASE_URL")
-	port := envOr("PORT", "8080")
+	// ADDR (host:port) wins over PORT: on the box the API listens on loopback only, behind Caddy.
+	addr := envOr("ADDR", ":"+envOr("PORT", "8080"))
+	autoMigrate := envOr("SUPPORT_AUTO_MIGRATE", "false") == "true"
 	devTools := envOr("SUPPORT_DEV_TOOLS", "false") == "true"
 	retentionDays := envInt("SUPPORT_RETENTION_DAYS", 90)
 	avgHandleMin := envFloat("SUPPORT_AVG_HANDLE_MIN", 6)
@@ -47,6 +53,14 @@ func main() {
 	}
 	defer pool.Close()
 
+	if autoMigrate {
+		n, err := migrations.Up(ctx, pool)
+		if err != nil {
+			log.Fatalf("migrate: %v", err)
+		}
+		slog.Info("support: migrations applied", "count", n)
+	}
+
 	store := postgres.New(pool)
 	broker := stream.NewBroker()
 	settingsStore := settings.New(store)
@@ -56,8 +70,21 @@ func main() {
 	if err != nil {
 		log.Fatalf("knowledge base: %v", err)
 	}
+	// Billing is fantasm's support API. Without it the bot still answers about
+	// plans in general and hands every cancellation or refund to a manager.
+	factsSource := facts.NewPostgres(pool, guides)
+	var billingActions domain.BillingActions
+	if fantasmURL, apiToken := os.Getenv("FANTASM_API_URL"), os.Getenv("SUPPORT_API_TOKEN"); fantasmURL != "" && apiToken != "" {
+		client := billing.New(fantasmURL, apiToken)
+		factsSource = factsSource.WithBilling(client)
+		billingActions = client
+	} else {
+		slog.Warn("support: FANTASM_API_URL or SUPPORT_API_TOKEN is not set, billing is off")
+	}
+	identities := identity.NewStore()
+
 	brainCfg := brain.FromEnv()
-	aiBrain, err := brain.New(ctx, brainCfg, facts.NewPostgres(pool, guides))
+	aiBrain, err := brain.New(ctx, brainCfg, factsSource)
 	if err != nil {
 		log.Fatalf("brain: %v", err)
 	}
@@ -70,9 +97,11 @@ func main() {
 		Moderation:    moderationSvc,
 		Mode:          support.ModeFromSettings(settingsStore),
 		RetentionDays: retentionDays,
+		Identities:    identities,
+		Billing:       billingActions,
 	}
 
-	intake := &httpapi.Intake{Store: store, Broker: broker, Limiter: httpapi.NewLimiter()}
+	intake := &httpapi.Intake{Store: store, Broker: broker, Limiter: httpapi.NewLimiter(), Identities: identities}
 	admin := &httpapi.Admin{
 		Service: svc, Store: store, Settings: settingsStore, Broker: broker,
 		AvgHandleMin: avgHandleMin, DevToolsEnabled: devTools,
@@ -100,7 +129,7 @@ func main() {
 		mux.HandleFunc("POST /api/support/dev/reset", admin.DevReset)
 	}
 
-	srv := &http.Server{Addr: ":" + port, Handler: mux}
+	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 
 	go runEvery(ctx, time.Second, 60*time.Second, svc.ProcessDue)
 	go runEvery(ctx, 24*time.Hour, time.Minute, svc.PurgeExpired)
@@ -112,7 +141,7 @@ func main() {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	slog.Info("support server listening", "port", port, "devTools", devTools, "model", map[bool]string{true: "offline keyword bot", false: brainCfg.LLM.ClassifierModel}[brainCfg.Fake])
+	slog.Info("support server listening", "addr", addr, "devTools", devTools, "model", map[bool]string{true: "offline keyword bot", false: brainCfg.LLM.ClassifierModel}[brainCfg.Fake])
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("serve: %v", err)
 	}

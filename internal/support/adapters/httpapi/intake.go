@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/handziurdmytro/skelar/internal/support/guard"
+	"github.com/handziurdmytro/skelar/internal/support/identity"
 	"github.com/handziurdmytro/skelar/internal/support/ports"
 	"github.com/handziurdmytro/skelar/internal/support/stream"
 )
@@ -27,10 +28,27 @@ type Store interface {
 }
 
 type Intake struct {
-	Store   Store
-	Broker  *stream.Broker
-	Limiter *Limiter
-	Now     func() time.Time
+	Store      Store
+	Broker     *stream.Broker
+	Limiter    *Limiter
+	Now        func() time.Time
+	Identities *identity.Store
+}
+
+// IdentityHeader carries the token fantasm issues to the person's browser for the
+// support bot (POST /api/me/support-token). The widget sends it with every message.
+const IdentityHeader = "X-Fantasm-Identity"
+
+var identityTokenRe = regexp.MustCompile(`^[A-Za-z0-9._~+/=-]+$`)
+
+// identityToken is the caller's fantasm token, or "" when it is missing or
+// malformed: the bot then treats the person as someone it does not know.
+func identityToken(r *http.Request) string {
+	t := r.Header.Get(IdentityHeader)
+	if len(t) < 16 || len(t) > 1024 || !identityTokenRe.MatchString(t) {
+		return ""
+	}
+	return t
 }
 
 func (h *Intake) appendEvent(ctx context.Context, ticketID, typ string, staff, public json.RawMessage) error {
@@ -133,7 +151,15 @@ func (h *Intake) PostMessage(w http.ResponseWriter, r *http.Request) {
 		ideaSlug = *req.IdeaSlug
 	}
 
-	var ticketID, messageID string
+	ticketID := ticket.ID
+	if isNewTicket {
+		ticketID = uuid.NewString()
+	}
+	// Before the job is queued: the worker may pick the ticket up the moment the
+	// transaction commits.
+	h.Identities.Put(ticketID, identityToken(r))
+
+	var messageID string
 	err := h.Store.WithinTx(ctx, func(ctx context.Context) error {
 		if isNewTicket {
 			var userIDPtr *string
@@ -141,7 +167,7 @@ func (h *Intake) PostMessage(w http.ResponseWriter, r *http.Request) {
 				userIDPtr = &userID
 			}
 			created, err := h.Store.Create(ctx, ports.NewTicketInput{
-				ID: uuid.NewString(), UserID: userIDPtr, AnonKeyHash: anonKeyHash,
+				ID: ticketID, UserID: userIDPtr, AnonKeyHash: anonKeyHash,
 				ContactEmail: email, Page: req.Page, IdeaSlug: ideaSlug,
 			})
 			if err != nil {
@@ -149,7 +175,6 @@ func (h *Intake) PostMessage(w http.ResponseWriter, r *http.Request) {
 			}
 			ticket = created
 		}
-		ticketID = ticket.ID
 
 		msg, err := h.Store.Insert(ctx, ports.NewMessageInput{
 			ID: uuid.NewString(), TicketID: ticket.ID, Author: "customer",

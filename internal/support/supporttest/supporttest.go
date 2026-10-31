@@ -114,6 +114,78 @@ func TeamGuide() domain.KBHit {
 		Snippet: "Зареєструйся індивідуально, вкажи навички й напиши в чат учасників: роль, навички, ідея, контакт.", Score: 4.2}
 }
 
+// Fantasm's price list: three author plans and three sponsorship levels.
+func catalog() ([]domain.PlanFacts, []domain.TierFacts) {
+	return []domain.PlanFacts{
+		{Code: "FREE", Name: "Старт", PriceMinor: 0, ActiveIdeas: 3},
+		{Code: "PLUS", Name: "Плюс", PriceMinor: 14900, ActiveIdeas: 15},
+		{Code: "PRO", Name: "Про", PriceMinor: 39900},
+	}, []domain.TierFacts{
+		{Code: "SUPPORTER", Name: "Друг ідеї", PriceMinor: 5000},
+		{Code: "BACKER", Name: "Меценат", PriceMinor: 20000},
+		{Code: "PATRON", Name: "Партнер", PriceMinor: 50000},
+	}
+}
+
+func billing(planCode string, activeIdeas int) *domain.BillingFacts {
+	plans, tiers := catalog()
+	b := &domain.BillingFacts{Handle: "olena", ActiveIdeas: activeIdeas, Plans: plans, Tiers: tiers}
+	for _, p := range plans {
+		if p.Code == planCode {
+			b.Plan = p
+		}
+	}
+	if b.Plan.Paid() {
+		b.PeriodEnd = Now.Add(12 * day)
+		b.Payments = []domain.PaymentFacts{{ID: "pay-1", Kind: "PLAN", AmountMinor: b.Plan.PriceMinor, Status: domain.PaymentSucceeded,
+			Description: "План «" + b.Plan.Name + "»", CreatedAt: Now.Add(-18 * day)}}
+	}
+	return b
+}
+
+// ProAuthor pays for «Про» and has this many active ideas: 4 fit «Плюс», 20 do not.
+func ProAuthor(activeIdeas int) *domain.BillingFacts { return billing("PRO", activeIdeas) }
+
+// PlusAuthor pays for «Плюс», the cheapest paid plan, so there is nothing cheaper to offer.
+func PlusAuthor() *domain.BillingFacts { return billing("PLUS", 4) }
+
+// EndingPlan already will not renew.
+func EndingPlan() *domain.BillingFacts {
+	b := ProAuthor(4)
+	b.CancelAtPeriodEnd = true
+	return b
+}
+
+// FreeAuthor pays for nothing.
+func FreeAuthor() *domain.BillingFacts { return billing("FREE", 2) }
+
+// Sponsor is on the free plan and backs one idea at «Меценат».
+func Sponsor() *domain.BillingFacts {
+	b := FreeAuthor()
+	b.Sponsorships = []domain.SponsorshipFacts{{ID: "sp-1", IdeaSlug: "sadok-na-dakhu", IdeaTitle: "Сад на даху корпусу", Tier: "BACKER",
+		TierName: "Меценат", PriceMinor: 20000, PeriodEnd: Now.Add(20 * day)}}
+	b.Payments = []domain.PaymentFacts{{ID: "pay-sp", Kind: "SPONSORSHIP", AmountMinor: 20000, Status: domain.PaymentSucceeded,
+		Description: "Спонсорство «Сад на даху корпусу»", CreatedAt: Now.Add(-10 * day)}}
+	return b
+}
+
+// DoubleCharged paid for «Плюс» twice within an hour, two days ago.
+func DoubleCharged() *domain.BillingFacts {
+	b := PlusAuthor()
+	b.Payments = []domain.PaymentFacts{
+		{ID: "pay-2", Kind: "PLAN", AmountMinor: 14900, Status: domain.PaymentSucceeded, Description: "План «Плюс»", CreatedAt: Now.Add(-47 * time.Hour)},
+		{ID: "pay-1", Kind: "PLAN", AmountMinor: 14900, Status: domain.PaymentSucceeded, Description: "План «Плюс»", CreatedAt: Now.Add(-48 * time.Hour)},
+	}
+	return b
+}
+
+// GoodwillGiven already got free days from the bot once.
+func GoodwillGiven() *domain.BillingFacts {
+	b := ProAuthor(20)
+	b.GoodwillUsed = true
+	return b
+}
+
 // Case is one input to the brain: what the model understood and what the database says.
 type Case struct {
 	Name  string
@@ -157,17 +229,27 @@ func Grid() []Case {
 			return ideaVariant{"live organization only", LiveIdea(domain.VisibilityOrganization), nil}
 		},
 	}
-	states := []domain.ConversationState{{}, {Flow: domain.FlowAppeal, Step: 1}}
+	states := []domain.ConversationState{{}, {Flow: domain.FlowAppeal, Step: 1},
+		{Flow: domain.FlowRetention, Step: 1}, {Flow: domain.FlowRetention, Step: 2}}
 	contexts := []struct {
 		name      string
 		push      *domain.PushFacts
 		knowledge []domain.KBHit
 		code      string
+		billing   func() *domain.BillingFacts
 	}{
-		{"bare", nil, nil, ""},
-		{"no push, guide, code", &domain.PushFacts{}, []domain.KBHit{TeamGuide()}, "AADSTS50020"},
-		{"stuck push, guide, code", &domain.PushFacts{Subscriptions: 1, Stuck: 2}, []domain.KBHit{TeamGuide()}, "AADSTS50020"},
-		{"healthy push", &domain.PushFacts{Subscriptions: 2}, nil, ""},
+		{"bare", nil, nil, "", nil},
+		{"no push, guide, code", &domain.PushFacts{}, []domain.KBHit{TeamGuide()}, "AADSTS50020", nil},
+		{"stuck push, guide, code", &domain.PushFacts{Subscriptions: 1, Stuck: 2}, []domain.KBHit{TeamGuide()}, "AADSTS50020", nil},
+		{"healthy push", &domain.PushFacts{Subscriptions: 2}, nil, "", nil},
+		{"pro, 4 ideas", nil, nil, "", func() *domain.BillingFacts { return ProAuthor(4) }},
+		{"pro, 20 ideas", nil, nil, "", func() *domain.BillingFacts { return ProAuthor(20) }},
+		{"plus", nil, nil, "", PlusAuthor},
+		{"plan ending", nil, nil, "", EndingPlan},
+		{"free", nil, nil, "", FreeAuthor},
+		{"sponsor", nil, nil, "", Sponsor},
+		{"double charged", nil, nil, "", DoubleCharged},
+		{"goodwill given", nil, nil, "", GoodwillGiven},
 	}
 
 	var out []Case
@@ -178,6 +260,10 @@ func Grid() []Case {
 				for _, state := range states {
 					for _, ctx := range contexts {
 						iv := mkIdea()
+						var b *domain.BillingFacts
+						if ctx.billing != nil {
+							b = ctx.billing()
+						}
 						emotion := domain.EmotionNeutral
 						if n%3 == 0 {
 							emotion = domain.EmotionAngry
@@ -187,7 +273,7 @@ func Grid() []Case {
 							Name: fmt.Sprintf("%s / %s / %s / %s / %s", intent, u.name, iv.name, state.Flow, ctx.name),
 							Class: domain.Classification{Intent: intent, Emotion: emotion, Language: "uk", Confidence: 0.9,
 								ErrorCode: ctx.code, UserQuestions: []string{"питання"}, Signals: []string{}},
-							Facts: domain.Facts{Now: Now, User: u.user(), Idea: iv.idea, Reports: iv.reports, Push: ctx.push, Knowledge: ctx.knowledge, State: state},
+							Facts: domain.Facts{Now: Now, User: u.user(), Idea: iv.idea, Reports: iv.reports, Push: ctx.push, Knowledge: ctx.knowledge, State: state, Billing: b},
 						})
 					}
 				}

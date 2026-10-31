@@ -47,6 +47,50 @@ func TestFakeRecognisesTheDemoScenarios(t *testing.T) {
 	}
 }
 
+func TestFakeReadsMoneyQuestions(t *testing.T) {
+	cases := []struct {
+		text string
+		want domain.Intent
+	}{
+		{"Хочу скасувати підписку", domain.IntentBillingCancel},
+		{"Скасуйте план і поверніть гроші", domain.IntentBillingRefund},
+		{"З мене двічі списали", domain.IntentBillingRefund},
+		{"Скільки коштує тариф «Плюс»?", domain.IntentBillingQuestion},
+		{"Як відписатися від сповіщень?", domain.IntentNotificationsIssue},
+	}
+	for _, tc := range cases {
+		if got := classify(t, tc.text).Intent; got != tc.want {
+			t.Errorf("%q: intent = %s, want %s", tc.text, got, tc.want)
+		}
+	}
+}
+
+func TestFakeReadsAnswersToAnOffer(t *testing.T) {
+	retention := domain.ConversationState{Flow: domain.FlowRetention, Step: 1}
+	cases := []struct {
+		text string
+		want domain.Intent
+	}{
+		{"ні", domain.IntentBillingCancel},
+		{"Ні, дякую", domain.IntentBillingCancel},
+		{"все одно не підходить", domain.IntentBillingCancel},
+		{"так, давай", domain.IntentThanksResolved},
+		{"Підходить, лишаюсь", domain.IntentThanksResolved},
+		{"поверніть гроші", domain.IntentBillingRefund},
+		{"Котра година?", domain.IntentUnknown},
+	}
+	for _, tc := range cases {
+		c, _, err := Fake{}.Classify(context.Background(), domain.ClassifyInput{Text: tc.text, State: retention})
+		if err != nil || c.Intent != tc.want {
+			t.Errorf("%q: intent = %s, want %s (%v)", tc.text, c.Intent, tc.want, err)
+		}
+	}
+	// Outside retention a bare "ні" means nothing.
+	if got := classify(t, "ні").Intent; got != domain.IntentUnknown {
+		t.Errorf("bare ні outside retention = %s", got)
+	}
+}
+
 func TestFakeConfidenceSaysWhetherAKeywordMatched(t *testing.T) {
 	if c := classify(t, "Чому моєї ідеї немає в стрічці?"); c.Confidence != 0.8 {
 		t.Errorf("matched confidence = %v, want 0.8", c.Confidence)

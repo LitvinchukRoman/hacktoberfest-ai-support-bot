@@ -19,6 +19,7 @@ type executeInput struct {
 	Final    domain.Decision
 	Checks   []guard.Check
 	Reply    string
+	Draft    string // the reply an approval sends, when it differs from Reply
 	Usage    domain.Usage
 }
 
@@ -85,8 +86,12 @@ func (s *Service) execute(ctx context.Context, in executeInput) error {
 			}
 		}
 
+		draft := in.Reply
+		if in.Draft != "" {
+			draft = in.Draft
+		}
 		for _, a := range in.Final.Actions {
-			if err := s.recordAction(ctx, t, in.Final, a, in.Reply); err != nil {
+			if err := s.recordAction(ctx, t, in.Final, a, draft); err != nil {
 				return err
 			}
 		}

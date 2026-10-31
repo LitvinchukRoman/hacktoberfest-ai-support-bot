@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/handziurdmytro/skelar/internal/moderation"
+	"github.com/handziurdmytro/skelar/internal/support/billing"
 	"github.com/handziurdmytro/skelar/internal/support/domain"
 	"github.com/handziurdmytro/skelar/internal/support/guard"
 	"github.com/handziurdmytro/skelar/internal/support/ports"
@@ -15,6 +17,9 @@ import (
 var (
 	ErrConflict   = errors.New("already decided")
 	ErrValidation = errors.New("validation failed")
+	// ErrBillingUnavailable means fantasm did not apply an approved billing change,
+	// most often because the person's token expired. The action stays pending.
+	ErrBillingUnavailable = errors.New("billing change not applied")
 )
 
 const declinedReplyText = "Вибач, цю дію не підтвердили. Я передав деталі нашій команді, вони напишуть тобі окремо."
@@ -44,10 +49,30 @@ func (s *Service) Approve(ctx context.Context, actionID, decidedBy, editedReply 
 			}
 		case domain.ActDataRequest:
 			// admin takes the GDPR request into work via CompleteDataRequest; nothing to execute here.
+		case domain.ActExtendPlan:
+			if err := s.extendApproved(ctx, a); err != nil {
+				return err
+			}
 		}
 
 		return s.finishApproved(ctx, a)
 	})
+}
+
+// extendApproved gives the free days a colleague approved. It needs the person's
+// fantasm token, which lives only as long as their last message plus 15 minutes.
+func (s *Service) extendApproved(ctx context.Context, a ports.Action) error {
+	if s.Billing == nil {
+		return fmt.Errorf("%w: billing is not configured", ErrBillingUnavailable)
+	}
+	days, err := strconv.Atoi(a.Params["days"])
+	if err != nil {
+		return fmt.Errorf("%w: bad days %q", ErrBillingUnavailable, a.Params["days"])
+	}
+	if _, err := s.Billing.ExtendPlan(ctx, s.Identities.Get(a.TicketID), billing.GoodwillActionID(a.Params["handle"]), days); err != nil {
+		return fmt.Errorf("%w: %v", ErrBillingUnavailable, err)
+	}
+	return nil
 }
 
 func (s *Service) finishApproved(ctx context.Context, a ports.Action) error {

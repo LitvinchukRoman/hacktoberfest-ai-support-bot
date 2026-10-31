@@ -22,12 +22,16 @@ type Config struct {
 	PremoderationSLA time.Duration // a pending idea waiting longer than this is overdue
 	TrustThreshold   int           // approved ideas after which an author skips premoderation
 	Reports          investigate.ReportRules
+	GoodwillDays     int           // free days of the plan offered once to keep a person; 0 turns the offer off
+	DuplicateWindow  time.Duration // two equal charges this close together look like a double charge
 }
 
 var DefaultConfig = Config{
 	PremoderationSLA: 48 * time.Hour,
 	TrustThreshold:   trustedAfter,
 	Reports:          investigate.DefaultReportRules,
+	GoodwillDays:     7,
+	DuplicateWindow:  72 * time.Hour,
 }
 
 // Decide picks the rule for one classified message.
@@ -35,6 +39,10 @@ func Decide(c domain.Classification, f domain.Facts, cfg Config) domain.Decision
 	// An appeal in progress continues as an appeal, unless the person is closing the chat.
 	if f.State.Flow == domain.FlowAppeal && f.Idea != nil && c.Intent != domain.IntentThanksResolved {
 		return appeal(f, cfg)
+	}
+	// A retention conversation goes on until the person stays, asks a question or reaches a manager.
+	if f.State.Flow == domain.FlowRetention && retentionHandles(c.Intent) {
+		return retentionFlow(c, f, cfg)
 	}
 	switch c.Intent {
 	case domain.IntentIdeaVisibility:
@@ -59,6 +67,10 @@ func Decide(c domain.Classification, f domain.Facts, cfg Config) domain.Decision
 		return d
 	case domain.IntentThanksResolved:
 		return answer("T1_thanks", "thanks.close", nil)
+	case domain.IntentBillingCancel, domain.IntentBillingRefund:
+		return retention(c, f, cfg)
+	case domain.IntentBillingQuestion:
+		return billingQuestion(f)
 	default:
 		// account_data, human_request, legal, offensive, unknown: guard decides how and to whom.
 		return handoff("P0_operations_intent", "escalation.generic", "інтент "+string(c.Intent)+" обробляє guard", domain.QueueAdmins, nil)

@@ -30,6 +30,10 @@ func TestValidate(t *testing.T) {
 		{"www link without scheme", "Детальніше на www.example.com", autoDecision, false, "no_external_links"},
 		{"overpromise on auto is fine - action really ran", "Я відновив твою ідею.", autoDecision, true, ""},
 		{"overpromise on approve is a lie - nothing executed yet", "Я відновив твою ідею.", approveDecision, false, "no_overpromise"},
+		{"free days said before a colleague approved", "Я додав тобі 7 днів «Про».", approveDecision, false, "no_overpromise"},
+		{"a cancellation is never the bot's to report", "Готово, підписку скасовано.", autoDecision, false, "no_billing_promise"},
+		{"nor is a refund", "Я повернув кошти на картку.", autoDecision, false, "no_billing_promise"},
+		{"talking about cancelling is fine", "Рішення про скасування підписки й повернення коштів ухвалює менеджер.", approveDecision, true, ""},
 	}
 
 	for _, tt := range tests {

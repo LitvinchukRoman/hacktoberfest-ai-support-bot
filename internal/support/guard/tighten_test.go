@@ -146,6 +146,60 @@ func TestHighRiskActionNeverAutoExecutes(t *testing.T) {
 	}
 }
 
+func goodwill(days string) domain.Decision {
+	return domain.Decision{
+		Autonomy: domain.AutonomyAuto, Rule: "M3_goodwill_days", TemplateID: "retention.goodwill", Status: domain.StatusAwaitingCustomer,
+		Actions:   []domain.Action{{Type: domain.ActExtendPlan, Queue: domain.QueueSupport, Params: map[string]string{"days": days, "handle": "olena"}}},
+		NextState: domain.ConversationState{Flow: domain.FlowRetention, Step: 2},
+	}
+}
+
+func TestFreeDays(t *testing.T) {
+	cancel := domain.Classification{Intent: domain.IntentBillingCancel, Confidence: 0.9}
+
+	if got := Tighten(Input{Decision: goodwill("7"), Class: cancel}, DefaultConfig); got.Autonomy != domain.AutonomyAuto {
+		t.Fatalf("a week of free days is the bot's own call, got %s", got.Autonomy)
+	}
+	for _, days := range []string{"0", "15", "365", "", "x"} {
+		got := Tighten(Input{Decision: goodwill(days), Class: cancel}, DefaultConfig)
+		if got.Autonomy != domain.AutonomyApprove || got.TemplateID != "retention.goodwill_pending" {
+			t.Errorf("days=%q: got %s/%s, want a colleague's approval and a reply that waits for it", days, got.Autonomy, got.TemplateID)
+		}
+	}
+	got := Tighten(Input{Decision: goodwill("7"), Class: cancel, Mode: ModeApproveAll}, DefaultConfig)
+	if got.Autonomy != domain.AutonomyApprove || got.TemplateID != "retention.goodwill_pending" {
+		t.Fatalf("approve_all: got %s/%s", got.Autonomy, got.TemplateID)
+	}
+}
+
+func TestMoneyConversationsReachSupportManagers(t *testing.T) {
+	retention := domain.ConversationState{Flow: domain.FlowRetention, Step: 1}
+	offer := domain.Decision{Autonomy: domain.AutonomyAuto, Rule: "M2_offer_cheaper_plan", Status: domain.StatusAwaitingCustomer}
+	handoff := domain.Decision{Autonomy: domain.AutonomyEscalate, Rule: "M4_insists", Status: domain.StatusEscalated,
+		Escalation: &domain.Escalation{Reason: "retention_handoff", Queue: domain.QueueSupport, Priority: 2, Note: "план «Про»"}}
+
+	tests := []struct {
+		name  string
+		in    Input
+		queue domain.Queue
+		note  string
+	}{
+		{"unclear reply mid-retention", Input{Decision: offer, Class: domain.Classification{Intent: domain.IntentUnknown}, State: retention}, domain.QueueSupport, ""},
+		{"unsure billing intent", Input{Decision: offer, Class: domain.Classification{Intent: domain.IntentBillingCancel, Confidence: 0.4}}, domain.QueueSupport, ""},
+		{"a person asked for mid-handoff keeps the manager's note", Input{Decision: handoff, Class: domain.Classification{Intent: domain.IntentBillingCancel, Confidence: 0.9}, Signals: []Signal{SignalHuman}}, domain.QueueSupport, "план «Про»"},
+		{"unclear idea question still goes to moderators", Input{Decision: offer, Class: domain.Classification{Intent: domain.IntentUnknown}}, domain.QueueModerators, ""},
+		{"legal stays with admins", Input{Decision: handoff, Class: domain.Classification{Intent: domain.IntentLegal, Confidence: 0.9}, State: retention}, domain.QueueAdmins, "план «Про»"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Tighten(tt.in, DefaultConfig)
+			if got.Escalation == nil || got.Escalation.Queue != tt.queue || got.Escalation.Note != tt.note {
+				t.Fatalf("escalation = %+v, want queue %s note %q", got.Escalation, tt.queue, tt.note)
+			}
+		})
+	}
+}
+
 func TestEscalateClearsActionsAndSuggestions(t *testing.T) {
 	in := Input{
 		Decision: domain.Decision{

@@ -271,6 +271,8 @@ func writeApprovalResult(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "conflict", "someone already decided")
 	case errors.Is(err, support.ErrValidation):
 		writeError(w, http.StatusBadRequest, "validation_failed", "reason is required")
+	case errors.Is(err, support.ErrBillingUnavailable):
+		writeError(w, http.StatusBadGateway, "billing_unavailable", "fantasm did not apply the change; reject it and answer the person yourself")
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, "internal_error", "failed to decide")
 	default:

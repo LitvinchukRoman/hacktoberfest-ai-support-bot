@@ -1,6 +1,7 @@
 // Package facts reads what a support decision needs from fantasm's database: the
-// person, their idea, the reports on it, push delivery and the knowledge base.
-// It only reads, and only what the intent needs. An idea is loaded only when its
+// person, their idea, the reports on it, push delivery and the knowledge base, and
+// from fantasm's support API what the person pays for. It only reads, and only
+// what the intent needs. An idea is loaded only when its
 // author is the person asking. Reporters stay anonymous: the age of the account,
 // its approved ideas and the time of the report, never who filed it.
 //
@@ -13,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -43,12 +45,18 @@ type Searcher interface {
 	Search(query string, limit int) []domain.KBHit
 }
 
+// Billing reads the person's billing from fantasm; billing.Client implements it.
+type Billing interface {
+	Billing(ctx context.Context, identity string) (*domain.BillingFacts, error)
+}
+
 const knowledgeHits = 3
 
 type Postgres struct {
-	db   DB
-	kb   Searcher
-	seal Seal
+	db      DB
+	kb      Searcher
+	billing Billing
+	seal    Seal
 }
 
 func NewPostgres(db DB, kb Searcher) *Postgres {
@@ -57,12 +65,27 @@ func NewPostgres(db DB, kb Searcher) *Postgres {
 
 func (p *Postgres) WithSeal(s Seal) *Postgres { p.seal = s; return p }
 
+// WithBilling lets billing questions see what the person pays for.
+func (p *Postgres) WithBilling(b Billing) *Postgres { p.billing = b; return p }
+
 var errNoUser = errors.New("user not found")
+
+// needsBilling: money talk, or a retention conversation that is still going on.
+func needsBilling(in domain.FactsInput) bool {
+	switch in.Intent {
+	case domain.IntentBillingCancel, domain.IntentBillingRefund, domain.IntentBillingQuestion:
+		return true
+	}
+	return in.State.Flow == domain.FlowRetention
+}
 
 func (p *Postgres) Facts(ctx context.Context, in domain.FactsInput) (domain.Facts, error) {
 	f := domain.Facts{Now: in.Now, State: in.State}
 	if in.Intent == domain.IntentHowTo && p.kb != nil {
 		f.Knowledge = p.kb.Search(in.Question, knowledgeHits)
+	}
+	if needsBilling(in) && p.billing != nil {
+		f.Billing = p.loadBilling(ctx, in.Identity)
 	}
 	if in.UserID == "" {
 		return f, nil
@@ -99,6 +122,29 @@ func (p *Postgres) Facts(ctx context.Context, in domain.FactsInput) (domain.Fact
 		f.Push = &push
 	}
 	return f, nil
+}
+
+// loadBilling never fails the ticket: without billing the policy hands the person to
+// a support manager instead of guessing what they pay for.
+func (p *Postgres) loadBilling(ctx context.Context, identity string) *domain.BillingFacts {
+	b, err := p.billing.Billing(ctx, identity)
+	if err != nil {
+		slog.Warn("support: billing unavailable", "err", err)
+		return nil
+	}
+	if b == nil {
+		return nil
+	}
+	err = p.db.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM support_actions
+		               WHERE type = 'extend_plan' AND status IN ('executed', 'approved') AND params ->> 'handle' = $1)`,
+		b.Handle).Scan(&b.GoodwillUsed)
+	if err != nil {
+		// Unknown counts as already given: a second gift is worse than none.
+		slog.Warn("support: goodwill lookup failed", "err", err)
+		b.GoodwillUsed = true
+	}
+	return b
 }
 
 func (p *Postgres) user(ctx context.Context, userID string, now time.Time) (domain.UserFacts, int, error) {

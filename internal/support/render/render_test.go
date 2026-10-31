@@ -26,6 +26,9 @@ var required = []string{
 	"escalation.generic", "escalation.legal", "escalation.offensive", "escalation.human", "escalation.unclear", "escalation.fallback",
 	"safety.support", "safety.cannot_do", "safety.pii_removed",
 	"gdpr.request_received", "gdpr.done",
+	"billing.login_needed", "billing.plans_general", "billing.plans", "billing.plans_cheaper",
+	"retention.offer_plan", "retention.offer_tier", "retention.goodwill", "retention.goodwill_pending", "retention.handoff",
+	"retention.unavailable", "retention.already_ending", "retention.nothing_paid", "retention.accepted", "refund.duplicate",
 }
 
 // sample fills every slot a template asks for.
@@ -83,10 +86,22 @@ func TestSafetyReplyGivesTheHelplineNumbers(t *testing.T) {
 
 func TestNothingIsDoneBeforeAPersonApproves(t *testing.T) {
 	// Only the reply sent after a moderator approved may say the idea is back.
-	done := regexp.MustCompile(`відновив|відновлено|видалив|видалено|змінив роль`)
+	// Free days are said to be given only by the reply sent after they were.
+	done := regexp.MustCompile(`відновив|відновлено|видалив|видалено|змінив роль|додав тобі|днів додано`)
+	afterTheFact := map[string]bool{"appeal.restored": true, "retention.goodwill": true}
 	for id, text := range render.Templates {
-		if id != "appeal.restored" && done.MatchString(text) {
+		if !afterTheFact[id] && done.MatchString(text) {
 			t.Errorf("%s promises a finished action: %q", id, done.FindString(text))
+		}
+	}
+}
+
+func TestNoReplySaysMoneyMoved(t *testing.T) {
+	// Cancelling and refunding are a manager's call, so no reply may claim either happened.
+	moved := regexp.MustCompile(`(?i)скасовано|скасував|скасувала|кошти повернуто|гроші повернуто|повернув кошти|повернули кошти`)
+	for id, text := range render.Templates {
+		if moved.MatchString(text) {
+			t.Errorf("%s says money or a plan moved: %q", id, moved.FindString(text))
 		}
 	}
 }

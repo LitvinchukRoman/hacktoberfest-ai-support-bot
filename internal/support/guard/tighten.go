@@ -2,6 +2,7 @@ package guard
 
 import (
 	"slices"
+	"strconv"
 
 	"github.com/handziurdmytro/skelar/internal/support/domain"
 )
@@ -31,6 +32,24 @@ type Input struct {
 	PII           []string
 	Mode          Mode
 	RecentTickets int
+	State         domain.ConversationState // where the conversation was before this message
+}
+
+// aboutMoney reports whether the conversation is about what the person pays: a
+// soft escalation then goes to a support manager, who can see and change billing,
+// instead of to moderators, who can do neither.
+func aboutMoney(in Input) bool {
+	if in.State.Flow == domain.FlowRetention {
+		return true
+	}
+	if e := in.Decision.Escalation; e != nil && e.Queue == domain.QueueSupport {
+		return true
+	}
+	switch in.Class.Intent {
+	case domain.IntentBillingCancel, domain.IntentBillingRefund, domain.IntentBillingQuestion:
+		return true
+	}
+	return false
 }
 
 // Tighten can only move a decision towards a human: auto -> approve ->
@@ -39,6 +58,10 @@ type Input struct {
 func Tighten(in Input, cfg Config) domain.Decision {
 	d, c := in.Decision, in.Class
 	has := func(s Signal) bool { return slices.Contains(in.Signals, s) }
+	soft := domain.QueueModerators
+	if aboutMoney(in) {
+		soft = domain.QueueSupport
+	}
 
 	out := d
 	switch {
@@ -61,11 +84,11 @@ func Tighten(in Input, cfg Config) domain.Decision {
 	case c.Intent == domain.IntentOffensive:
 		out = escalate(d, "offensive", "escalation.offensive", domain.QueueModerators, 3)
 	case has(SignalHuman) || c.Intent == domain.IntentHumanRequest:
-		out = escalate(d, "human_requested", "escalation.human", domain.QueueModerators, 2)
+		out = escalate(d, "human_requested", "escalation.human", soft, 2)
 	case c.Intent == domain.IntentUnknown || c.Confidence < cfg.MinConfidence:
-		out = escalate(d, "low_confidence", "escalation.unclear", domain.QueueModerators, 3)
+		out = escalate(d, "low_confidence", "escalation.unclear", soft, 3)
 	case c.Emotion == domain.EmotionAngry && in.RecentTickets >= cfg.RepeatContacts:
-		out = escalate(d, "repeat_contact", "escalation.human", domain.QueueModerators, 2)
+		out = escalate(d, "repeat_contact", "escalation.human", soft, 2)
 	}
 
 	if in.Mode == ModeApproveAll && out.Autonomy == domain.AutonomyAuto {
@@ -78,6 +101,12 @@ func Tighten(in Input, cfg Config) domain.Decision {
 	// guarantee again here, on the Ops side.
 	if out.Autonomy == domain.AutonomyAuto && hasHighRiskAction(out.Actions) {
 		out.Autonomy, out.Status = domain.AutonomyApprove, domain.StatusAwaitingApproval
+	}
+
+	// Free days that wait for a colleague have not been given yet, so the reply
+	// must not say they were.
+	if out.Autonomy == domain.AutonomyApprove && out.TemplateID == "retention.goodwill" {
+		out.TemplateID = "retention.goodwill_pending"
 	}
 
 	if domain.Stricter(d.Autonomy, out.Autonomy) != out.Autonomy {
@@ -96,19 +125,33 @@ var highRiskActions = map[domain.ActionType]bool{
 	domain.ActDataRequest: true,
 }
 
+// MaxGoodwillDays caps the free days the bot gives on its own; a larger gift is a
+// colleague's call.
+const MaxGoodwillDays = 14
+
 func hasHighRiskAction(actions []domain.Action) bool {
 	for _, a := range actions {
-		if highRiskActions[a.Type] {
+		if highRiskActions[a.Type] || (a.Type == domain.ActExtendPlan && !smallGift(a)) {
 			return true
 		}
 	}
 	return false
 }
 
+func smallGift(a domain.Action) bool {
+	days, err := strconv.Atoi(a.Params["days"])
+	return err == nil && days >= 1 && days <= MaxGoodwillDays && a.Params["handle"] != ""
+}
+
 // escalate builds an escalated decision: rule gets a G_ prefix, actions and
 // suggested buttons are cleared (an escalated ticket performs no actions),
-// and the ticket moves to the given queue/priority.
+// and the ticket moves to the given queue/priority. The policy's note stays:
+// it is what the colleague reads first.
 func escalate(d domain.Decision, reason, template string, queue domain.Queue, priority int) domain.Decision {
+	note := ""
+	if d.Escalation != nil {
+		note = d.Escalation.Note
+	}
 	return domain.Decision{
 		Autonomy:   domain.AutonomyEscalate,
 		Rule:       "G_" + reason,
@@ -117,6 +160,6 @@ func escalate(d domain.Decision, reason, template string, queue domain.Queue, pr
 		Slots:      d.Slots,
 		Status:     domain.StatusEscalated,
 		NextState:  d.NextState,
-		Escalation: &domain.Escalation{Reason: reason, Queue: queue, Priority: priority},
+		Escalation: &domain.Escalation{Reason: reason, Queue: queue, Priority: priority, Note: note},
 	}
 }

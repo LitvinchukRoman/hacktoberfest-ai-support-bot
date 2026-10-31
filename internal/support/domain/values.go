@@ -1,6 +1,9 @@
 package domain
 
-import "slices"
+import (
+	"slices"
+	"time"
+)
 
 // Valid reports whether the intent is one the classifier may return.
 func (i Intent) Valid() bool { return slices.Contains(Intents, i) }
@@ -32,4 +35,15 @@ const (
 
 	ProviderGoogle = "google"
 	ProviderEntra  = "entra"
+
+	PlanFree         = "FREE"      // billing plan codes
+	PaymentSucceeded = "SUCCEEDED" // billing_payments.status
 )
+
+// RefundWindow mirrors fantasm's limit on how old a charge support may still refund.
+const RefundWindow = 14 * 24 * time.Hour
+
+// Refundable reports whether fantasm would still accept a refund of the payment.
+func (p PaymentFacts) Refundable(now time.Time) bool {
+	return p.Status == PaymentSucceeded && p.AmountMinor > 0 && now.Sub(p.CreatedAt) <= RefundWindow
+}

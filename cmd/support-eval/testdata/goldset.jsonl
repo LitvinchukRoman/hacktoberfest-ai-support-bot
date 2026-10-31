@@ -37,6 +37,17 @@
 {"tag":"english","intent":"bug_report","text":"The publish button is broken on mobile"}
 {"tag":"reworded","intent":"thanks_resolved","text":"Дякую, все запрацювало!"}
 {"tag":"surzhyk","intent":"thanks_resolved","text":"спасибі, розібрався"}
+{"tag":"S8","intent":"billing_cancel","text":"Хочу скасувати підписку «Про»"}
+{"tag":"reworded","intent":"billing_cancel","text":"дорого виходить, не хочу більше платити щомісяця"}
+{"tag":"english","intent":"billing_cancel","text":"please cancel my subscription"}
+{"tag":"reworded","intent":"billing_cancel","text":"як відмовитися від спонсорства ідеї?"}
+{"tag":"S9","intent":"billing_refund","text":"З мене двічі списали гроші, поверніть кошти"}
+{"tag":"reworded","intent":"billing_refund","text":"скасуйте план і поверніть гроші за цей місяць"}
+{"tag":"english","intent":"billing_refund","text":"I want a refund for last month"}
+{"tag":"S10","intent":"billing_question","text":"Чим тариф «Плюс» відрізняється від «Про»?"}
+{"tag":"reworded","intent":"billing_question","text":"скільки коштує спонсорство ідеї?"}
+{"tag":"reworded","intent":"billing_question","text":"за що з мене списали 149 гривень?"}
+{"tag":"edge","intent":"notifications_issue","text":"як відписатися від сповіщень на пошту?"}
 {"tag":"gdpr","intent":"account_data","text":"Хочу видалити свій акаунт і всі дані"}
 {"tag":"gdpr","intent":"account_data","text":"Які мої персональні дані ви зберігаєте?"}
 {"tag":"english","intent":"account_data","text":"please send me a copy of my data"}

@@ -22,6 +22,9 @@ const (
 	IntentReportContent      Intent = "report_content"
 	IntentBugReport          Intent = "bug_report"
 	IntentThanksResolved     Intent = "thanks_resolved"
+	IntentBillingCancel      Intent = "billing_cancel"
+	IntentBillingRefund      Intent = "billing_refund"
+	IntentBillingQuestion    Intent = "billing_question"
 	IntentAccountData        Intent = "account_data"
 	IntentHumanRequest       Intent = "human_request"
 	IntentLegal              Intent = "legal"
@@ -34,7 +37,8 @@ const (
 var Intents = []Intent{
 	IntentIdeaVisibility, IntentModerationAppeal, IntentVerificationSeal, IntentLoginProblem,
 	IntentNotificationsIssue, IntentHowTo, IntentRoleRequest, IntentReportContent, IntentBugReport,
-	IntentThanksResolved, IntentAccountData, IntentHumanRequest, IntentLegal, IntentOffensive, IntentUnknown,
+	IntentThanksResolved, IntentBillingCancel, IntentBillingRefund, IntentBillingQuestion,
+	IntentAccountData, IntentHumanRequest, IntentLegal, IntentOffensive, IntentUnknown,
 }
 
 type Emotion string
@@ -111,6 +115,10 @@ const (
 	ActNotifyStaff ActionType = "notify_staff"
 	ActBugReport   ActionType = "bug_report"
 	ActDataRequest ActionType = "data_request"
+	// ActExtendPlan gives free days of the paid plan through fantasm's support API.
+	// It is the only billing change the bot can make: cancelling and refunding are
+	// a support manager's call and have no action type at all.
+	ActExtendPlan ActionType = "extend_plan"
 )
 
 type Queue string
@@ -118,6 +126,8 @@ type Queue string
 const (
 	QueueModerators Queue = "moderators"
 	QueueAdmins     Queue = "admins"
+	// QueueSupport is the support managers: cancellations, refunds, billing.
+	QueueSupport Queue = "support"
 )
 
 type Action struct {
@@ -156,6 +166,9 @@ type Flow string
 const (
 	FlowNone   Flow = ""
 	FlowAppeal Flow = "appeal"
+	// FlowRetention is a person who wants to cancel or get money back. Step counts
+	// the offers already made: 1 after a cheaper option, 2 after free days.
+	FlowRetention Flow = "retention"
 )
 
 type ConversationState struct {
@@ -231,12 +244,83 @@ type KBHit struct {
 	Score   float64
 }
 
+// PlanFacts is one author plan. Money is in kopiyky; ActiveIdeas 0 means no limit.
+type PlanFacts struct {
+	Code        string // FREE | PLUS | PRO
+	Name        string
+	PriceMinor  int
+	ActiveIdeas int
+}
+
+func (p PlanFacts) Paid() bool { return p.PriceMinor > 0 }
+
+// Fits reports whether an author with this many active ideas stays within the plan.
+func (p PlanFacts) Fits(activeIdeas int) bool {
+	return p.ActiveIdeas == 0 || activeIdeas <= p.ActiveIdeas
+}
+
+// TierFacts is one sponsorship level.
+type TierFacts struct {
+	Code       string // SUPPORTER | BACKER | PATRON
+	Name       string
+	PriceMinor int
+}
+
+type SponsorshipFacts struct {
+	ID                string
+	IdeaSlug          string
+	IdeaTitle         string
+	Tier              string
+	TierName          string
+	PriceMinor        int
+	PeriodEnd         time.Time
+	CancelAtPeriodEnd bool
+}
+
+type PaymentFacts struct {
+	ID          string
+	Kind        string // PLAN | SPONSORSHIP
+	AmountMinor int
+	Status      string // SUCCEEDED | REFUNDED
+	Description string
+	CreatedAt   time.Time
+}
+
+// BillingFacts is the person's billing as fantasm reports it to the support bot.
+type BillingFacts struct {
+	Handle            string
+	Plan              PlanFacts // in effect now: FREE when nothing is paid
+	PeriodEnd         time.Time // zero on the free plan
+	CancelAtPeriodEnd bool
+	ActiveIdeas       int
+	Plans             []PlanFacts // the price list, cheapest first
+	Tiers             []TierFacts // cheapest first
+	Sponsorships      []SponsorshipFacts
+	Payments          []PaymentFacts // newest first
+	// GoodwillUsed is true once the bot has given this person free days; it does so once.
+	GoodwillUsed bool
+}
+
+// Extension is fantasm's answer to free days: the new end of the paid period, and
+// whether the same gift had already been applied before.
+type Extension struct {
+	PeriodEnd time.Time
+	Replayed  bool
+}
+
+// BillingActions are the billing changes the bot may make itself. There is no
+// cancel and no refund here on purpose.
+type BillingActions interface {
+	ExtendPlan(ctx context.Context, identity, actionID string, days int) (Extension, error)
+}
+
 type Facts struct {
 	Now           time.Time
 	User          *UserFacts
 	Idea          *IdeaFacts
 	Reports       []ReportFacts
 	Push          *PushFacts
+	Billing       *BillingFacts
 	Knowledge     []KBHit
 	State         ConversationState
 	RecentTickets int
@@ -262,7 +346,10 @@ type ClassifyInput struct {
 }
 
 type FactsInput struct {
-	UserID   string
+	UserID string
+	// Identity is the short-lived token fantasm issued to the person's browser for
+	// the support bot. It is the only way to see their billing; empty for visitors.
+	Identity string
 	IdeaSlug string
 	IdeaHint string
 	Intent   Intent

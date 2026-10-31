@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,8 +14,11 @@ import (
 
 	"github.com/handziurdmytro/skelar/internal/moderation"
 	"github.com/handziurdmytro/skelar/internal/platform/settings"
+	"github.com/handziurdmytro/skelar/internal/support/billing"
 	"github.com/handziurdmytro/skelar/internal/support/domain"
 	"github.com/handziurdmytro/skelar/internal/support/guard"
+	"github.com/handziurdmytro/skelar/internal/support/identity"
+	"github.com/handziurdmytro/skelar/internal/support/policy"
 	"github.com/handziurdmytro/skelar/internal/support/ports"
 	"github.com/handziurdmytro/skelar/internal/support/stream"
 )
@@ -38,6 +43,10 @@ type Service struct {
 	Mode          func(ctx context.Context) guard.Mode
 	Now           func() time.Time
 	RetentionDays int
+	// Identities holds each ticket's fantasm token; Billing makes the one billing
+	// change the bot is allowed. Without Billing the bot hands such cases to a manager.
+	Identities *identity.Store
+	Billing    domain.BillingActions
 }
 
 // appendEvent persists the event and schedules its broadcast for right
@@ -162,8 +171,9 @@ func (s *Service) processTicket(ctx context.Context, ticketID string) error {
 	if ticket.UserID != nil {
 		userID = *ticket.UserID
 	}
+	identityToken := s.Identities.Get(ticketID)
 	facts, err := s.Brain.Facts.Facts(ctx, domain.FactsInput{
-		UserID: userID, IdeaSlug: ticket.IdeaSlug, IdeaHint: cls.IdeaHint,
+		UserID: userID, Identity: identityToken, IdeaSlug: ticket.IdeaSlug, IdeaHint: cls.IdeaHint,
 		Intent: cls.Intent, Question: first(cls.UserQuestions), State: ticket.State, Now: s.now(),
 	})
 	if err != nil {
@@ -178,15 +188,21 @@ func (s *Service) processTicket(ctx context.Context, ticketID string) error {
 
 	final := guard.Tighten(guard.Input{
 		Decision: proposed, Class: cls, Signals: sig, PII: pii,
-		Mode: s.mode(ctx), RecentTickets: facts.RecentTickets,
+		Mode: s.mode(ctx), RecentTickets: facts.RecentTickets, State: ticket.State,
 	}, guard.DefaultConfig)
 	s.trace(ctx, ticketID, "decide", "Вирішую, що робити…",
 		map[string]any{"policy": proposed.Rule, "final": final.Rule, "autonomy": final.Autonomy})
 
-	reply, _, err := s.Brain.Renderer.Render(ctx, domain.RenderInput{
-		TemplateID: final.TemplateID, Slots: final.Slots, Language: cls.Language,
-		Emotion: cls.Emotion, Question: first(cls.UserQuestions), Knowledge: facts.Knowledge,
-	})
+	final = s.giveGoodwill(ctx, ticketID, identityToken, final)
+
+	render := func(template string, slots map[string]string) (string, error) {
+		reply, _, err := s.Brain.Renderer.Render(ctx, domain.RenderInput{
+			TemplateID: template, Slots: slots, Language: cls.Language,
+			Emotion: cls.Emotion, Question: first(cls.UserQuestions), Knowledge: facts.Knowledge,
+		})
+		return reply, err
+	}
+	reply, err := render(final.TemplateID, final.Slots)
 	validated, checks := guard.Validate(reply, final)
 	s.trace(ctx, ticketID, "validate", "Перевіряю відповідь…", checks)
 	if err != nil || !validated {
@@ -194,12 +210,72 @@ func (s *Service) processTicket(ctx context.Context, ticketID string) error {
 		reply = fallbackReplyText
 	}
 
+	// Free days waiting for a colleague: the person hears they are asked for now,
+	// and the colleague's approval sends the reply that says they were given.
+	draft := ""
+	if final.TemplateID == "retention.goodwill_pending" {
+		if done, err := render("retention.goodwill", final.Slots); err == nil {
+			draft = done
+		}
+	}
+
 	s.trace(ctx, ticketID, "route", routeSummary(final), final.Escalation)
 
 	return s.execute(ctx, executeInput{
 		Ticket: ticket, Messages: msgs, Class: cls, Facts: facts, Proposed: proposed, Final: final,
-		Checks: checks, Reply: reply, Usage: usage,
+		Checks: checks, Reply: reply, Draft: draft, Usage: usage,
 	})
+}
+
+// giveGoodwill makes the one billing change the bot does on its own, free days of
+// the plan, before the reply says they were given. When fantasm does not apply
+// them, the person goes to a support manager instead of hearing a promise.
+func (s *Service) giveGoodwill(ctx context.Context, ticketID, identityToken string, d domain.Decision) domain.Decision {
+	if d.Autonomy != domain.AutonomyAuto || s.mode(ctx) == guard.ModeShadow {
+		return d
+	}
+	a, ok := extendAction(d)
+	if !ok {
+		return d
+	}
+	if s.Billing == nil {
+		return goodwillFailed(d, "білінг fantasm не підключений до бота")
+	}
+	days, _ := strconv.Atoi(a.Params["days"])
+	ext, err := s.Billing.ExtendPlan(ctx, identityToken, billing.GoodwillActionID(a.Params["handle"]), days)
+	if err != nil {
+		slog.Warn("support: extend plan", "ticket", ticketID, "err", err)
+		return goodwillFailed(d, "fantasm не застосував подарунок днів: "+err.Error())
+	}
+	s.trace(ctx, ticketID, "act", "Додаю дні до плану…", map[string]any{"periodEnd": ext.PeriodEnd, "replayed": ext.Replayed})
+	if ext.PeriodEnd.IsZero() {
+		return d
+	}
+	out := d
+	out.Slots = maps.Clone(d.Slots)
+	out.Slots["until"] = policy.Day(ext.PeriodEnd)
+	return out
+}
+
+func extendAction(d domain.Decision) (domain.Action, bool) {
+	for _, a := range d.Actions {
+		if a.Type == domain.ActExtendPlan {
+			return a, true
+		}
+	}
+	return domain.Action{}, false
+}
+
+func goodwillFailed(d domain.Decision, why string) domain.Decision {
+	return domain.Decision{
+		Autonomy:   domain.AutonomyEscalate,
+		Rule:       "G_billing_action_failed",
+		TemplateID: "retention.handoff",
+		Status:     domain.StatusEscalated,
+		NextState:  d.NextState,
+		Escalation: &domain.Escalation{Reason: "billing_action_failed", Queue: domain.QueueSupport, Priority: 2,
+			Note: "клієнт хоче скасувати підписку; бот хотів подарувати безкоштовні дні, але " + why},
+	}
 }
 
 func fallbackEscalation(d domain.Decision, failedCheck string) domain.Decision {
