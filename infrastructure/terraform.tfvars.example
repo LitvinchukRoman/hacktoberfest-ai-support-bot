@@ -1,0 +1,16 @@
+acme_email = "you@example.com"
+
+# Plain settings for the API (SSM String). Overriding replaces the whole default map.
+# app_env = {
+#   SUPPORT_LLM_BASE_URL     = "https://generativelanguage.googleapis.com/v1beta/openai/"
+#   SUPPORT_CLASSIFIER_MODEL = "gemma-4-31b-it"
+#   SUPPORT_WRITER_MODEL     = "gemma-4-26b-a4b-it"
+#   SUPPORT_LLM_TIMEOUT      = "15s"
+#   SUPPORT_LLM_JSON_SCHEMA  = "true"   # from the smoke test in BACKEND_1_AI.md
+#   SUPPORT_LLM_SYSTEM_ROLE  = "true"
+# }
+
+# secret_names = ["GEMINI_API_KEY", "DATABASE_URL"]
+
+# Reach the shared fantasm RDS on 5432:
+# rds_security_group_name = "fantasm-rds"

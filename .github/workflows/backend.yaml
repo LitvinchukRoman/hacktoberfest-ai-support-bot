@@ -1,0 +1,108 @@
+name: Backend
+
+# PR: vet, test, build. Push to main: the same checks, then deploy to
+# support-api.naukma.com. Runs on arm64 because the box is Graviton (GitHub's
+# arm64 runners are free for public repositories).
+#
+# The deploy job reads repo variables from the `prod` environment; create them
+# with `terraform -chdir=infrastructure output -raw github_setup_commands`.
+# Rollback: re-run an older successful run; it rebuilds that commit.
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore: ["infrastructure/**", "**.md"]
+  push:
+    branches: [main]
+    paths-ignore: ["infrastructure/**", "**.md"]
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  # Directory with go.mod and the main package inside it.
+  APP_DIR: ${{ vars.GO_APP_DIR || '.' }}
+  PKG: ${{ vars.GO_MAIN_PKG || './cmd/server' }}
+  GOTOOLCHAIN: local
+  GOFLAGS: -mod=readonly
+
+jobs:
+  check:
+    name: Vet, test, build
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    concurrency:
+      group: backend-check-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ env.APP_DIR }}/go.mod
+          cache-dependency-path: ${{ env.APP_DIR }}/go.sum
+      - name: gofmt
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::run gofmt -w on:"; echo "$unformatted"; exit 1
+          fi
+      - name: go vet
+        working-directory: ${{ env.APP_DIR }}
+        run: go vet ./...
+      - name: go test
+        working-directory: ${{ env.APP_DIR }}
+        run: go test -race -shuffle=on -count=1 ./...
+      - name: go build
+        working-directory: ${{ env.APP_DIR }}
+        run: CGO_ENABLED=0 go build -trimpath -o /dev/null "$PKG"
+
+  deploy:
+    name: Deploy
+    needs: check
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    environment:
+      name: prod
+      url: https://support-api.naukma.com
+    permissions:
+      id-token: write
+      contents: read
+    concurrency:
+      group: backend-deploy-prod
+      cancel-in-progress: false
+    env:
+      RELEASES_BUCKET: ${{ vars.RELEASES_BUCKET }}
+      INSTANCE_ID: ${{ vars.INSTANCE_ID }}
+      DEPLOY_DOCUMENT: ${{ vars.DEPLOY_DOCUMENT }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ env.APP_DIR }}/go.mod
+          cache-dependency-path: ${{ env.APP_DIR }}/go.sum
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-central-1
+          role-session-name: support-bot-deploy
+      - name: Build, upload, deploy through SSM
+        run: bash infrastructure/scripts/deploy.sh
+      - name: Smoke test
+        run: |
+          for i in $(seq 1 10); do
+            if curl -fsS --max-time 5 https://support-api.naukma.com/healthz; then
+              echo "Deployed \`${GITHUB_SHA::7}\` to https://support-api.naukma.com" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::https://support-api.naukma.com/healthz is not healthy"
+          exit 1

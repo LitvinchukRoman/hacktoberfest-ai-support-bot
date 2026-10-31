@@ -1,0 +1,163 @@
+#!/bin/bash
+# Runs once at first boot (cloud-init user_data). Log: /var/log/support-bootstrap.log
+set -euxo pipefail
+exec > >(tee -a /var/log/support-bootstrap.log) 2>&1
+
+# 512 MiB RAM: swap keeps dnf, the SSM agent and load spikes from OOM-killing the API.
+if [ ! -f /swapfile ]; then
+  dd if=/dev/zero of=/swapfile bs=1M count=1024
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  echo '/swapfile none swap defaults 0 0' >> /etc/fstab
+fi
+
+dnf -y install jq tar
+systemctl enable --now amazon-ssm-agent
+
+# --- PostgreSQL (local, unix socket only) -----------------------------------
+# The bot's own database lives on this box's root volume: it goes with the box on
+# `terraform apply -replace=aws_instance.app`. No TCP listener, no password: the
+# API's system user `support` connects as the role `support` by peer auth.
+dnf -y install postgresql16-server postgresql16
+if [ ! -f /var/lib/pgsql/data/PG_VERSION ]; then
+  postgresql-setup --initdb
+fi
+cat >> /var/lib/pgsql/data/postgresql.conf <<'EOF'
+
+# support-bot: 512 MiB box shared with the API and Caddy.
+listen_addresses = ''
+max_connections = 20
+shared_buffers = 32MB
+work_mem = 2MB
+maintenance_work_mem = 16MB
+effective_cache_size = 128MB
+EOF
+cat > /var/lib/pgsql/data/pg_hba.conf <<'EOF'
+local all    postgres peer
+local skelar support  peer
+EOF
+chown postgres:postgres /var/lib/pgsql/data/pg_hba.conf
+chmod 0600 /var/lib/pgsql/data/pg_hba.conf
+systemctl enable --now postgresql
+
+runuser -u postgres -- psql -v ON_ERROR_STOP=1 <<'EOF'
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'support') THEN CREATE ROLE support LOGIN; END IF;
+END $$;
+SELECT 'CREATE DATABASE skelar OWNER support' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'skelar')\gexec
+EOF
+
+# --- Caddy (static binary, checksum-verified) -------------------------------
+cd /tmp
+curl -fsSLO "https://github.com/caddyserver/caddy/releases/download/v${caddy_version}/caddy_${caddy_version}_linux_arm64.tar.gz"
+curl -fsSLO "https://github.com/caddyserver/caddy/releases/download/v${caddy_version}/caddy_${caddy_version}_checksums.txt"
+sha512sum -c --ignore-missing "caddy_${caddy_version}_checksums.txt"
+tar -xzf "caddy_${caddy_version}_linux_arm64.tar.gz" caddy
+install -m 0755 caddy /usr/local/bin/caddy
+
+getent group caddy >/dev/null || groupadd --system caddy
+id caddy >/dev/null 2>&1 || useradd --system --gid caddy --home-dir /var/lib/caddy --create-home --shell /sbin/nologin caddy
+
+mkdir -p /etc/caddy
+cat > /etc/caddy/Caddyfile <<'EOF'
+{
+	email ${acme_email}
+}
+
+${fqdn} {
+	request_body {
+		max_size 1MB
+	}
+
+	reverse_proxy 127.0.0.1:${app_port} {
+		# SSE (/api/support/tickets/{id}/events): send each event immediately.
+		flush_interval -1
+	}
+
+	log {
+		output stdout
+	}
+}
+EOF
+
+cat > /etc/systemd/system/caddy.service <<'EOF'
+[Unit]
+Description=Caddy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=caddy
+Group=caddy
+ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile
+ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
+TimeoutStopSec=5s
+LimitNOFILE=1048576
+PrivateTmp=true
+ProtectSystem=full
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# --- Support API -------------------------------------------------------------
+getent group support >/dev/null || groupadd --system support
+id support >/dev/null 2>&1 || useradd --system --gid support --no-create-home --shell /sbin/nologin support
+
+mkdir -p /opt/support-bot/releases
+install -d -m 0700 /etc/support-bot
+
+# Pulls every parameter under ${ssm_prefix} into an env file.
+# Placeholders (CHANGE_ME) are skipped so a missing secret is a clear app error.
+cat > /usr/local/bin/support-api-env <<'EOF'
+#!/bin/bash
+set -euo pipefail
+umask 077
+tmp=$(mktemp /etc/support-bot/api.env.XXXXXX)
+trap 'rm -f "$tmp"' EXIT
+aws ssm get-parameters-by-path \
+  --region ${region} \
+  --path ${ssm_prefix} \
+  --recursive \
+  --with-decryption \
+  --query 'Parameters[].[Name,Value]' \
+  --output json \
+  | jq -r '.[] | select(.[1] != "CHANGE_ME") | "\(.[0] | split("/") | last)=\(.[1])"' > "$tmp"
+mv -f "$tmp" /etc/support-bot/api.env
+trap - EXIT
+EOF
+chmod 0755 /usr/local/bin/support-api-env
+
+cat > /etc/systemd/system/support-api.service <<'EOF'
+[Unit]
+Description=Support API
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+# Skipped quietly until the first deploy puts a binary in place.
+ConditionPathExists=/opt/support-bot/current/support-api
+
+[Service]
+User=support
+Group=support
+ExecStartPre=+/usr/local/bin/support-api-env
+EnvironmentFile=/etc/support-bot/api.env
+ExecStart=/opt/support-bot/current/support-api
+Restart=on-failure
+RestartSec=2
+StateDirectory=support-bot
+WorkingDirectory=/var/lib/support-bot
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now caddy
+systemctl enable support-api

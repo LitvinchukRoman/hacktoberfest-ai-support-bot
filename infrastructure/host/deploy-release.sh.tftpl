@@ -1,0 +1,43 @@
+set -euo pipefail
+SHA="{{ Sha }}"
+BASE=/opt/support-bot
+DIR="$BASE/releases/$SHA"
+URL="http://127.0.0.1:${app_port}${health_path}"
+
+mkdir -p "$DIR"
+aws s3 cp --region ${region} --only-show-errors "s3://${bucket}/releases/$SHA/support-api" "$DIR/support-api.new"
+EXPECTED=$(aws s3 cp --region ${region} --only-show-errors "s3://${bucket}/releases/$SHA/support-api.sha256" - | cut -d' ' -f1)
+echo "$EXPECTED  $DIR/support-api.new" | sha256sum -c -
+chmod 0755 "$DIR/support-api.new"
+mv -f "$DIR/support-api.new" "$DIR/support-api"
+
+PREV=$(readlink -f "$BASE/current" || true)
+ln -sfn "$DIR" "$BASE/current.tmp"
+mv -Tf "$BASE/current.tmp" "$BASE/current"
+systemctl restart support-api
+
+healthy() {
+  for i in $(seq 1 30); do
+    if curl -fsS -o /dev/null --max-time 2 "$URL"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+if healthy; then
+  echo "deployed $SHA"
+  ls -1dt "$BASE"/releases/* | tail -n +4 | xargs -r rm -rf
+  exit 0
+fi
+
+echo "health check failed for $SHA" >&2
+journalctl -u support-api -n 50 --no-pager >&2 || true
+if [ -n "$PREV" ] && [ "$PREV" != "$DIR" ]; then
+  ln -sfn "$PREV" "$BASE/current.tmp"
+  mv -Tf "$BASE/current.tmp" "$BASE/current"
+  systemctl restart support-api
+  echo "rolled back to $PREV" >&2
+fi
+exit 1
