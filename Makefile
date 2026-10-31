@@ -9,7 +9,7 @@ build:
 test:
 	go test ./...
 
-test-integration:
+test-integration: db-up
 	TEST_DATABASE_URL=$(TEST_DATABASE_URL) go test ./internal/support/adapters/postgres/... -v
 
 test-all: test test-integration
